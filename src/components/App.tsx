@@ -128,8 +128,11 @@ function CreateMenu({ x, y, onClose }: { x: number; y: number; onClose: () => vo
     onClose();
   };
 
-  return (
-    <div style={{
+  const handleBackdropClick = (e: React.MouseEvent) => { e.stopPropagation(); onClose(); };
+
+  return (<>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 999 }} onMouseDown={handleBackdropClick} onContextMenu={e => { e.preventDefault(); handleBackdropClick(e); }}>
+    <div onMouseDown={e => e.stopPropagation()} style={{
       position: 'fixed', left: x, top: y, background: '#fff',
       border: '1px solid #e0e0e0', boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
       padding: 12, zIndex: 1000, minWidth: 200, fontFamily: 'monospace',
@@ -163,7 +166,8 @@ function CreateMenu({ x, y, onClose }: { x: number; y: number; onClose: () => vo
         ))}
       </div>
     </div>
-  );
+    </div>
+  </>);
 }
 
 function ConnectionLines({ nodeIds, visibleNodes, selectedConnection, onSelectConnection, onConnectionContextMenu }: {
@@ -1340,9 +1344,9 @@ function SessionView() {
             </div>
           )}
         </div>
-      </div>
-    );
-  }
+    </div>
+  );
+}
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 5000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace' }}>
