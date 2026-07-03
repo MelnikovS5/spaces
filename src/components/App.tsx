@@ -5,7 +5,31 @@ const COLORS: Record<string, string> = {
   space: '#222', focus: '#555', form: '#777', act: '#999', precedent: '#bbb', scenario: '#666', zone: '#bbb',
 };
 
-const SHAPES: Record<string, { label: string; render: (s: number) => JSX.Element }> = {
+function insetPolygon(pts: [number, number][], d: number): [number, number][] {
+  const n = pts.length;
+  let area = 0;
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % n];
+    area += x1 * y2 - x2 * y1;
+  }
+  const cw = area < 0;
+  const edges = pts.map((p, i) => {
+    const [x1, y1] = p, [x2, y2] = pts[(i + 1) % n];
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    let nx = dy / len, ny = -dx / len;
+    if (!cw) { nx = -nx; ny = -ny; }
+    return { nx, ny, c: nx * x1 + ny * y1 + d };
+  });
+  return pts.map((_, i) => {
+    const e1 = edges[(i - 1 + n) % n], e2 = edges[i];
+    const det = e1.nx * e2.ny - e1.ny * e2.nx;
+    if (Math.abs(det) < 0.001) return pts[i];
+    return [(e1.c * e2.ny - e1.ny * e2.c) / det, (e1.nx * e2.c - e1.c * e2.nx) / det] as [number, number];
+  });
+}
+
+const SHAPES: Record<string, { label: string; render: (s: number, hasLayers?: boolean) => JSX.Element }> = {
   space: {
     label: 'Пространство',
     render: (s) => <rect x={2} y={2} width={s - 4} height={s - 4} rx={4} fill="none" stroke={COLORS.space} strokeWidth={1.5} />,
@@ -16,13 +40,24 @@ const SHAPES: Record<string, { label: string; render: (s: number) => JSX.Element
   },
   form: {
     label: 'Фигура',
-    render: (s) => <polygon points={`${s / 2},2 2,${s - 2} ${s - 2},${s - 2}`} fill="none" stroke={COLORS.form} strokeWidth={1.5} />,
+    render: (s, hasLayers) => {
+      const pad = 2;
+      const outer = <polygon points={`${s / 2},${pad} ${pad},${s - pad} ${s - pad},${s - pad}`} fill="none" stroke={COLORS.form} strokeWidth={1.5} />;
+      if (!hasLayers) return outer;
+      const verts: [number, number][] = [[s / 2, pad], [pad, s - pad], [s - pad, s - pad]];
+      const inner = insetPolygon(verts, 10);
+      return <>{outer}<polygon points={inner.map(p => p.join(',')).join(' ')} fill="none" stroke={COLORS.form} strokeWidth={1} /></>;
+    },
   },
   act: {
     label: 'Акт',
-    render: (s) => {
-      const cx = s / 2;
-      return <polygon points={`${cx},${s - 2} 2,2 ${s - 2},2`} fill="none" stroke={COLORS.act} strokeWidth={1.5} />;
+    render: (s, hasLayers) => {
+      const pad = 2, cx = s / 2;
+      const outer = <polygon points={`${cx},${s - pad} ${pad},${pad} ${s - pad},${pad}`} fill="none" stroke={COLORS.act} strokeWidth={1.5} />;
+      if (!hasLayers) return outer;
+      const verts: [number, number][] = [[cx, s - pad], [pad, pad], [s - pad, pad]];
+      const inner = insetPolygon(verts, 10);
+      return <>{outer}<polygon points={inner.map(p => p.join(',')).join(' ')} fill="none" stroke={COLORS.act} strokeWidth={1} /></>;
     },
   },
   precedent: {
@@ -64,10 +99,10 @@ const btnStyle: React.CSSProperties = {
   padding: '1px 4px', color: '#888', fontFamily: 'inherit', lineHeight: 1,
 };
 
-function NodeShape({ type }: { type: string }) {
+function NodeShape({ type, hasLayers, size = NODE_SIZE }: { type: string; hasLayers?: boolean; size?: number }) {
   const s = SHAPES[type];
   if (!s) return null;
-  return <svg width={NODE_SIZE} height={NODE_SIZE} viewBox={`0 0 ${NODE_SIZE} ${NODE_SIZE}`}>{s.render(NODE_SIZE)}</svg>;
+  return <svg width={size} height={size} viewBox={`0 0 ${NODE_SIZE} ${NODE_SIZE}`}>{s.render(NODE_SIZE, hasLayers)}</svg>;
 }
 
 function Header({ onArchive }: { onArchive: () => void }) {
@@ -122,8 +157,12 @@ function CreateMenu({ x, y, onClose }: { x: number; y: number; onClose: () => vo
 
   const handleCreate = (t: NodeType) => {
     if (t === 'focus') createNode('focus', name || 'Фокус', x, y);
-    else if (t === 'act') createNode('act', name || 'Акт', x, y, { parentFocusId: focusId || undefined });
-    else if (t === 'form') createNode('form', name || 'Фигура', x, y, { parentFocusId: focusId || undefined });
+    else if (t === 'act') {
+      if (focusId) createNode('act', name || 'Акт', x, y, { parentFocusId: focusId });
+    }
+    else if (t === 'form') {
+      if (focusId) createNode('form', name || 'Фигура', x, y, { parentFocusId: focusId });
+    }
     else createNode(t, name || SHAPES[t].label, x, y);
     onClose();
   };
@@ -168,69 +207,6 @@ function CreateMenu({ x, y, onClose }: { x: number; y: number; onClose: () => vo
     </div>
     </div>
   </>);
-}
-
-function ConnectionLines({ nodeIds, visibleNodes, selectedConnection, onSelectConnection, onConnectionContextMenu }: {
-  nodeIds: Set<string>; visibleNodes: GraphNode[];
-  selectedConnection: string | null; onSelectConnection: (id: string | null) => void;
-  onConnectionContextMenu: (id: string, e: React.MouseEvent) => void;
-}) {
-  const allNodes = useGraph(s => s.nodes);
-  const connections = useGraph(s => s.connections);
-
-  const renderLine = (key: string, x1: number, y1: number, x2: number, y2: number, color: string, dash: string, connId?: string) => (
-    <g key={key}>
-      <line x1={x1} y1={y1} x2={x2} y2={y2}
-        stroke={connId && connId === selectedConnection ? '#222' : color}
-        strokeWidth={connId && connId === selectedConnection ? 2 : 1}
-        strokeDasharray={dash} pointerEvents="none" />
-    </g>
-  );
-
-  return (
-    <>
-    <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 6 }}>
-      {connections.map((l, i) => {
-        const from = allNodes[l.fromId], to = allNodes[l.toId];
-        if (!from || !to || !nodeIds.has(l.fromId) || !nodeIds.has(l.toId)) return null;
-        return renderLine(`c${i}`, from.x, from.y, to.x, to.y, '#ddd', '3 2', l.id);
-      })}
-      {visibleNodes.filter(n => n.type === 'act' && n.parentFocusId && nodeIds.has(n.parentFocusId)).map(act => {
-        const focus = allNodes[act.parentFocusId!];
-        if (!focus) return null;
-        return renderLine(`af-${act.id}`, act.x, act.y, focus.x, focus.y, '#ccc', '2 3');
-      })}
-      {visibleNodes.filter(n => n.type === 'form' && n.parentFocusId && nodeIds.has(n.parentFocusId)).map(form => {
-        const focus = allNodes[form.parentFocusId!];
-        if (!focus) return null;
-        return renderLine(`ff-${form.id}`, form.x, form.y, focus.x, focus.y, '#ddd', '2 4');
-      })}
-      {visibleNodes.filter(n => (n.type === 'precedent' || n.type === 'scenario') && n.parentActId && nodeIds.has(n.parentActId)).map(child => {
-        const act = allNodes[child.parentActId!];
-        if (!act) return null;
-        return renderLine(`pa-${child.id}`, child.x, child.y, act.x, act.y, '#ddd', '2 3');
-      })}
-    </svg>
-    {connections.map((l, i) => {
-      const from = allNodes[l.fromId], to = allNodes[l.toId];
-      if (!from || !to || !nodeIds.has(l.fromId) || !nodeIds.has(l.toId)) return null;
-      const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2;
-      const dx = to.x - from.x, dy = to.y - from.y;
-      const len = Math.sqrt(dx * dx + dy * dy) || 1;
-      const angle = Math.atan2(dy, dx) * 180 / Math.PI;
-      return (
-        <div key={`hit-${l.id}`}
-          onPointerDown={(e) => { e.stopPropagation(); onSelectConnection(l.id === selectedConnection ? null : l.id); }}
-          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onConnectionContextMenu(l.id, e); }}
-          style={{
-            position: 'absolute', left: mx - len / 2, top: my - 12, width: len, height: 24,
-            transform: `rotate(${angle}deg)`, transformOrigin: 'center center',
-            cursor: 'pointer', zIndex: 7, background: 'transparent',
-          }} />
-      );
-    })}
-    </>
-  );
 }
 
 function makeDragHandlers(
@@ -281,15 +257,49 @@ function makeDragHandlers(
   return { onPointerDown, onPointerMove, onPointerUp };
 }
 
+function ResizeHandle({ nodeId, nodeX, nodeY }: { nodeId: string; nodeX: number; nodeY: number }) {
+  const updateNode = useGraph(s => s.updateNode);
+  const [dragging, setDragging] = useState(false);
+  const ref = useRef<{ pointerId: number; sx: number; sy: number; startW: number; startH: number } | null>(null);
+  const allNodes = useGraph(s => s.nodes);
+  const node = allNodes[nodeId];
+  if (!node) return null;
+  const w = node.width ?? NODE_SIZE;
+  const h = node.height ?? NODE_SIZE;
+
+  return (
+    <div
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        if (e.button !== 0) return;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        setDragging(true);
+        ref.current = { pointerId: e.pointerId, sx: e.clientX, sy: e.clientY, startW: w, startH: h };
+      }}
+      onPointerMove={(e) => {
+        const d = ref.current;
+        if (!d || d.pointerId !== e.pointerId) return;
+        updateNode(nodeId, {
+          width: Math.max(50, d.startW + (e.clientX - d.sx)),
+          height: Math.max(50, d.startH + (e.clientY - d.sy)),
+        });
+      }}
+      onPointerUp={(e) => {
+        if (ref.current?.pointerId === e.pointerId) { ref.current = null; setDragging(false); }
+      }}
+      style={{
+        position: 'absolute', right: -4, bottom: -4, width: 10, height: 10,
+        background: '#222', borderRadius: '50%', cursor: 'se-resize', zIndex: 20,
+      }}
+    />
+  );
+}
+
 function FocusNode({
   focus, forms, actsByForm, orphanActs, onActSession, allNodes,
-  connectMode, connectSource, onConnectClick,
-  selectedConnection, onReconnect,
 }: {
   focus: GraphNode; forms: GraphNode[]; actsByForm: Record<string, GraphNode[]>;
   orphanActs: GraphNode[]; onActSession: (actId: string) => void; allNodes: GraphNode[];
-  connectMode: boolean; connectSource: string | null; onConnectClick: (id: string) => void;
-  selectedConnection: string | null; onReconnect: (id: string) => void;
 }) {
   const selectedIds = useGraph(s => s.selectedIds);
   const selectNode = useGraph(s => s.selectNode);
@@ -400,12 +410,12 @@ function FocusNode({
                       }}
                       autoFocus
                       style={{ flex: 1, padding: '2px 4px', border: '1px solid #ddd', borderRadius: 1, fontSize: 11, fontFamily: 'inherit', outline: 'none' }} />
-        </div>
-      )}
-          </div>
-        );
-        })}
-        {orphanActs.length > 0 && (
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {orphanActs.length > 0 && (
             <div style={{
               background: '#fff', border: '1px solid #eee', borderRadius: 3, padding: '6px 10px',
               minWidth: 200, boxShadow: '0 2px 8px rgba(0,0,0,0.04)', fontFamily: 'monospace', fontSize: 11,
@@ -428,22 +438,21 @@ function FocusNode({
         onPointerDown={(e) => {
           e.stopPropagation();
           if (e.button !== 0) return;
-          if (selectedConnection && e.shiftKey) { e.currentTarget.setPointerCapture(e.pointerId); onReconnect(focus.id); return; }
-          if (connectMode) { onConnectClick(focus.id); return; }
           dh.onPointerDown(e);
         }}
-        onPointerMove={(e) => { if (!connectMode) dh.onPointerMove(e); }}
-        onPointerUp={(e) => { if (!connectMode) dh.onPointerUp(e); }}
-        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); if (!connectMode) setShowCard(true); }}
+        onPointerMove={dh.onPointerMove}
+        onPointerUp={dh.onPointerUp}
+        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setShowCard(true); }}
         style={{
-          width: NODE_SIZE, height: NODE_SIZE, cursor: connectMode ? 'crosshair' : 'default',
+          width: NODE_SIZE, height: NODE_SIZE, cursor: 'default',
           userSelect: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-          boxShadow: connectSource === focus.id ? `0 0 0 3px ${COLORS.focus}` : glow, borderRadius: 2, padding: 2,
+          boxShadow: glow, borderRadius: 2, padding: 2,
           transition: 'left 0.2s ease, top 0.2s ease, opacity 0.15s ease, box-shadow 0.15s ease',
         }}>
         <NodeShape type="focus" />
         <span style={{ fontSize: 11, color: COLORS.focus, maxWidth: NODE_SIZE + 20, textAlign: 'center', lineHeight: 1.2, wordBreak: 'break-word' }}>{focus.name}</span>
       </div>
+      {isSelected && <ResizeHandle nodeId={focus.id} nodeX={focus.x} nodeY={focus.y} />}
 
       {showCard && (
         <div style={{
@@ -472,6 +481,8 @@ function FocusNode({
             background: 'none', border: '1px solid #ddd', borderRadius: 2, cursor: 'pointer',
             fontSize: 11, padding: '2px 8px', color: COLORS.act, fontFamily: 'inherit', marginBottom: 4, width: '100%',
           }}>△ Создать акт</button>
+          <button onClick={() => { createNode('form', 'Фигура', focus.x, focus.y + 60, { parentFocusId: focus.id }); setShowCard(false); }}
+          style={{ background: 'none', border: '1px solid #ddd', borderRadius: 2, cursor: 'pointer', fontSize: 11, padding: '2px 8px', color: '#333', fontFamily: 'inherit', marginBottom: 4, width: '100%' }}>△ Создать фигуру</button>
           <button onClick={() => { deleteNode(focus.id); setShowCard(false); }}
             style={{ background: 'none', border: '1px solid #ddd', borderRadius: 2, cursor: 'pointer', fontSize: 11, padding: '2px 8px', color: '#c00', fontFamily: 'inherit', width: '100%' }}>✕ Удалить</button>
         </div>
@@ -482,12 +493,8 @@ function FocusNode({
 
 function FormNode({
   form, allNodes,
-  connectMode, connectSource, onConnectClick,
-  selectedConnection, onReconnect,
 }: {
   form: GraphNode; allNodes: GraphNode[];
-  connectMode: boolean; connectSource: string | null; onConnectClick: (id: string) => void;
-  selectedConnection: string | null; onReconnect: (id: string) => void;
 }) {
   const selectedIds = useGraph(s => s.selectedIds);
   const selectNode = useGraph(s => s.selectNode);
@@ -495,9 +502,14 @@ function FormNode({
   const moveNode = useGraph(s => s.moveNode);
   const updateNode = useGraph(s => s.updateNode);
   const deleteNode = useGraph(s => s.deleteNode);
+  const addLayer = useGraph(s => s.addLayer);
+  const removeLayer = useGraph(s => s.removeLayer);
 
   const [showCard, setShowCard] = useState(false);
+  const [showLayers, setShowLayers] = useState(true);
+  const [newLayerText, setNewLayerText] = useState('');
   const isSelected = selectedIds.includes(form.id);
+  const hasLayers = form.layers.length > 0;
 
   const dragRef = useRef<{
     pointerId: number; ids: string[]; startPos: Record<string, { x: number; y: number }>;
@@ -505,34 +517,34 @@ function FormNode({
   } | null>(null);
 
   const dh = makeDragHandlers(form, isSelected, selectedIds, dragRef, selectNode, toggleSelectNode, moveNode, allNodes, () => setShowCard(true));
+  const fw = form.width ?? NODE_SIZE, fh = form.height ?? NODE_SIZE;
 
   return (
-    <div style={{ position: 'absolute', left: form.x - NODE_SIZE / 2, top: form.y - NODE_SIZE / 2, zIndex: 10 }}>
+    <div style={{ position: 'absolute', left: form.x - fw / 2, top: form.y - fh / 2, zIndex: 10 }}>
       <div
         onPointerDown={(e) => {
           e.stopPropagation();
           if (e.button !== 0) return;
-          if (selectedConnection && e.shiftKey) { e.currentTarget.setPointerCapture(e.pointerId); onReconnect(form.id); return; }
-          if (connectMode) { onConnectClick(form.id); return; }
           dh.onPointerDown(e);
         }}
-        onPointerMove={(e) => { if (!connectMode) dh.onPointerMove(e); }}
-        onPointerUp={(e) => { if (!connectMode) dh.onPointerUp(e); }}
-        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); if (!connectMode) setShowCard(true); }}
+        onPointerMove={dh.onPointerMove}
+        onPointerUp={dh.onPointerUp}
+        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setShowCard(true); }}
         style={{
-          width: NODE_SIZE, height: NODE_SIZE, cursor: connectMode ? 'crosshair' : 'default',
+          width: fw, height: fh, cursor: 'default',
           userSelect: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-          boxShadow: connectSource === form.id ? `0 0 0 3px ${COLORS.form}` : isSelected ? `0 0 0 2px ${COLORS.form}` : 'none',
+          boxShadow: isSelected ? `0 0 0 2px ${COLORS.form}` : 'none',
           borderRadius: 2, padding: 2,
           transition: 'left 0.2s ease, top 0.2s ease, opacity 0.15s ease, box-shadow 0.15s ease',
         }}>
-        <NodeShape type="form" />
-        <span style={{ fontSize: 11, color: COLORS.form, maxWidth: NODE_SIZE + 20, textAlign: 'center', lineHeight: 1.2, wordBreak: 'break-word' }}>{form.name}</span>
+        <NodeShape type="form" hasLayers={hasLayers} size={fw} />
+        <span style={{ fontSize: 11, color: COLORS.form, maxWidth: fw + 20, textAlign: 'center', lineHeight: 1.2, wordBreak: 'break-word' }}>{form.name}</span>
       </div>
+      {isSelected && <ResizeHandle nodeId={form.id} nodeX={form.x} nodeY={form.y} />}
       {showCard && (
         <div style={{
-          position: 'fixed', left: Math.min(form.x + NODE_SIZE / 2 + 8, window.innerWidth - 220),
-          top: Math.max(8, Math.min(form.y - NODE_SIZE / 2, window.innerHeight - 150)),
+          position: 'fixed', left: Math.min(form.x + fw / 2 + 8, window.innerWidth - 220),
+          top: Math.max(8, Math.min(form.y - fh / 2, window.innerHeight - 150)),
           background: '#fff', border: '1px solid #ddd', boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
           padding: 12, zIndex: 2000, minWidth: 200, fontFamily: 'monospace', maxWidth: 260,
         }}>
@@ -550,8 +562,36 @@ function FormNode({
             placeholder="Описание..." rows={2}
             onKeyDown={e => { if (e.key === 'Escape') setShowCard(false); }}
             style={{ width: '100%', padding: '4px 6px', border: '1px solid #ddd', borderRadius: 2, fontSize: 11, fontFamily: 'inherit', outline: 'none', resize: 'vertical', color: '#555', marginBottom: 8, boxSizing: 'border-box' }} />
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 10, color: '#bbb', marginBottom: 4, cursor: 'pointer', userSelect: 'none' }}
+              onClick={() => setShowLayers(v => !v)}>
+              СЛОИ ({form.layers.length}) {showLayers ? '▼' : '▶'}
+            </div>
+            {showLayers && (
+              <>
+                {form.layers.map((layer, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#555', marginTop: 2 }}>
+                    <span style={{ color: '#999', width: 16 }}>{i + 1}.</span>
+                    <span style={{ flex: 1 }}>{layer}</span>
+                    <button onClick={() => removeLayer(form.id, i)} style={{ ...btnStyle, color: '#c00' }}>✕</button>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', gap: 2, marginTop: 4 }}>
+                  <input value={newLayerText} onChange={e => setNewLayerText(e.target.value)}
+                    placeholder="+ слой"
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && newLayerText.trim()) {
+                        addLayer(form.id, newLayerText.trim());
+                        setNewLayerText('');
+                      }
+                    }}
+                    style={{ flex: 1, padding: '2px 4px', border: '1px solid #ddd', borderRadius: 1, fontSize: 11, fontFamily: 'inherit', outline: 'none' }} />
+                </div>
+              </>
+            )}
+          </div>
           <button onClick={() => { deleteNode(form.id); setShowCard(false); }}
-            style={{ background: 'none', border: '1px solid #ddd', borderRadius: 2, cursor: 'pointer', fontSize: 11, padding: '2px 8px', color: '#c00', fontFamily: 'inherit' }}>✕ Удалить</button>
+            style={{ background: 'none', border: '1px solid #ddd', borderRadius: 2, cursor: 'pointer', fontSize: 11, padding: '2px 8px', color: '#c00', fontFamily: 'inherit', width: '100%' }}>✕ Удалить</button>
         </div>
       )}
     </div>
@@ -560,12 +600,8 @@ function FormNode({
 
 function ActNode({
   act, precedents, scenarios, onActSession, allNodes,
-  connectMode, connectSource, onConnectClick,
-  selectedConnection, onReconnect,
 }: {
   act: GraphNode; precedents: GraphNode[]; scenarios: GraphNode[]; onActSession: (actId: string) => void; allNodes: GraphNode[];
-  connectMode: boolean; connectSource: string | null; onConnectClick: (id: string) => void;
-  selectedConnection: string | null; onReconnect: (id: string) => void;
 }) {
   const selectedIds = useGraph(s => s.selectedIds);
   const selectNode = useGraph(s => s.selectNode);
@@ -573,19 +609,21 @@ function ActNode({
   const moveNode = useGraph(s => s.moveNode);
   const updateNode = useGraph(s => s.updateNode);
   const deleteNode = useGraph(s => s.deleteNode);
-  const addStep = useGraph(s => s.addStep);
-  const removeStep = useGraph(s => s.removeStep);
+  const addLayer = useGraph(s => s.addLayer);
+  const removeLayer = useGraph(s => s.removeLayer);
   const createPrecedentAct = useGraph(s => s.createPrecedent);
   const convertToScenario = useGraph(s => s.convertToScenario);
   const completeScenario = useGraph(s => s.completeScenario);
 
   const [showCard, setShowCard] = useState(false);
-  const [newStepText, setNewStepText] = useState('');
+  const [newLayerText, setNewLayerText] = useState('');
+  const [showLayers, setShowLayers] = useState(true);
 
   const isSelected = selectedIds.includes(act.id);
   const glow = isSelected ? `0 0 0 2px ${COLORS.act}` : 'none';
   const hasChild = precedents.length > 0 || scenarios.length > 0;
   const isSuccess = act.status === 'success';
+  const hasLayers = act.layers.length > 0;
 
   const dragRef = useRef<{
     pointerId: number; ids: string[]; startPos: Record<string, { x: number; y: number }>;
@@ -593,34 +631,34 @@ function ActNode({
   } | null>(null);
 
   const dh = makeDragHandlers(act, isSelected, selectedIds, dragRef, selectNode, toggleSelectNode, moveNode, allNodes, () => setShowCard(true));
+  const aw = act.width ?? NODE_SIZE, ah = act.height ?? NODE_SIZE;
 
   return (
-    <div style={{ position: 'absolute', left: act.x - NODE_SIZE / 2, top: act.y - NODE_SIZE / 2, zIndex: 10 }}>
+    <div style={{ position: 'absolute', left: act.x - aw / 2, top: act.y - ah / 2, zIndex: 10 }}>
       <div
         onPointerDown={(e) => {
           e.stopPropagation();
           if (e.button !== 0) return;
-          if (selectedConnection && e.shiftKey) { e.currentTarget.setPointerCapture(e.pointerId); onReconnect(act.id); return; }
-          if (connectMode) { onConnectClick(act.id); return; }
           dh.onPointerDown(e);
         }}
-        onPointerMove={(e) => { if (!connectMode) dh.onPointerMove(e); }}
-        onPointerUp={(e) => { if (!connectMode) dh.onPointerUp(e); }}
-        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); if (!connectMode) setShowCard(true); }}
+        onPointerMove={dh.onPointerMove}
+        onPointerUp={dh.onPointerUp}
+        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setShowCard(true); }}
         style={{
-          width: NODE_SIZE, height: NODE_SIZE, cursor: connectMode ? 'crosshair' : 'default',
+          width: aw, height: ah, cursor: 'default',
           userSelect: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-          boxShadow: connectSource === act.id ? `0 0 0 3px ${COLORS.act}` : glow, borderRadius: 2, padding: 2,
+          boxShadow: glow, borderRadius: 2, padding: 2,
           transition: 'left 0.2s ease, top 0.2s ease, opacity 0.15s ease, box-shadow 0.15s ease',
         }}>
-        <NodeShape type="act" />
-        <span style={{ fontSize: 11, color: COLORS.act, maxWidth: NODE_SIZE + 20, textAlign: 'center', lineHeight: 1.2, wordBreak: 'break-word' }}>{act.name}</span>
+        <NodeShape type="act" hasLayers={hasLayers} size={aw} />
+        <span style={{ fontSize: 11, color: COLORS.act, maxWidth: aw + 20, textAlign: 'center', lineHeight: 1.2, wordBreak: 'break-word' }}>{act.name}</span>
       </div>
+      {isSelected && <ResizeHandle nodeId={act.id} nodeX={act.x} nodeY={act.y} />}
 
       {showCard && (
         <div style={{
-          position: 'fixed', left: Math.min(act.x + NODE_SIZE / 2 + 8, window.innerWidth - 220),
-          top: Math.max(8, Math.min(act.y - NODE_SIZE / 2, window.innerHeight - 150)),
+          position: 'fixed', left: Math.min(act.x + aw / 2 + 8, window.innerWidth - 220),
+          top: Math.max(8, Math.min(act.y - ah / 2, window.innerHeight - 150)),
           background: '#fff', border: '1px solid #ddd', boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
           padding: 12, zIndex: 2000, minWidth: 220, fontFamily: 'monospace', maxWidth: 280,
         }}>
@@ -629,6 +667,7 @@ function ActNode({
               onBlur={e => { updateNode(act.id, { name: e.target.value.trim() || act.name }); }}
               onKeyDown={e => { if (e.key === 'Escape') setShowCard(false); }}
               autoFocus
+              placeholder="Название..."
               style={{ flex: 1, padding: '4px 6px', border: '1px solid #ddd', borderRadius: 2, fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
             <button onClick={() => setShowCard(false)}
               style={{ background: '#222', color: '#fff', border: 'none', padding: '4px 8px', cursor: 'pointer', fontSize: 11, borderRadius: 2, fontFamily: 'inherit' }}>ОК</button>
@@ -656,25 +695,32 @@ function ActNode({
           )}
 
           <div style={{ marginBottom: 8 }}>
-            <div style={{ fontSize: 10, color: '#bbb', marginBottom: 4 }}>ШАГИ</div>
-            {act.steps.map((step, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#555', marginTop: 2 }}>
-                <span>{i + 1}.</span>
-                <span style={{ flex: 1 }}>{step}</span>
-                <button onClick={() => removeStep(act.id, i)} style={{ ...btnStyle, color: '#c00' }}>✕</button>
-              </div>
-            ))}
-            <div style={{ display: 'flex', gap: 2, marginTop: 4 }}>
-              <input value={newStepText} onChange={e => setNewStepText(e.target.value)}
-                placeholder="+ шаг" autoFocus
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && newStepText.trim()) {
-                    addStep(act.id, newStepText.trim());
-                    setNewStepText('');
-                  }
-                }}
-                style={{ flex: 1, padding: '2px 4px', border: '1px solid #ddd', borderRadius: 1, fontSize: 11, fontFamily: 'inherit', outline: 'none' }} />
+            <div style={{ fontSize: 10, color: '#bbb', marginBottom: 4, cursor: 'pointer', userSelect: 'none' }}
+              onClick={() => setShowLayers(v => !v)}>
+              СЛОИ ({act.layers.length}) {showLayers ? '▼' : '▶'}
             </div>
+            {showLayers && (
+              <>
+                {act.layers.map((layer, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#555', marginTop: 2 }}>
+                    <span style={{ color: '#999', width: 16 }}>{i + 1}.</span>
+                    <span style={{ flex: 1 }}>{layer}</span>
+                    <button onClick={() => removeLayer(act.id, i)} style={{ ...btnStyle, color: '#c00' }}>✕</button>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', gap: 2, marginTop: 4 }}>
+                  <input value={newLayerText} onChange={e => setNewLayerText(e.target.value)}
+                    placeholder="+ слой"
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && newLayerText.trim()) {
+                        addLayer(act.id, newLayerText.trim());
+                        setNewLayerText('');
+                      }
+                    }}
+                    style={{ flex: 1, padding: '2px 4px', border: '1px solid #ddd', borderRadius: 1, fontSize: 11, fontFamily: 'inherit', outline: 'none' }} />
+                </div>
+              </>
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
@@ -696,12 +742,8 @@ function ActNode({
 
 function SmallNode({
   node, allNodes,
-  connectMode, connectSource, onConnectClick,
-  selectedConnection, onReconnect,
 }: {
   node: GraphNode; allNodes: GraphNode[];
-  connectMode: boolean; connectSource: string | null; onConnectClick: (id: string) => void;
-  selectedConnection: string | null; onReconnect: (id: string) => void;
 }) {
   const selectedIds = useGraph(s => s.selectedIds);
   const selectNode = useGraph(s => s.selectNode);
@@ -730,17 +772,15 @@ function SmallNode({
         onPointerDown={(e) => {
           e.stopPropagation();
           if (e.button !== 0) return;
-          if (selectedConnection && e.shiftKey) { e.currentTarget.setPointerCapture(e.pointerId); onReconnect(node.id); return; }
-          if (connectMode) { onConnectClick(node.id); return; }
           dh.onPointerDown(e);
         }}
-        onPointerMove={(e) => { if (!connectMode) dh.onPointerMove(e); }}
-        onPointerUp={(e) => { if (!connectMode) dh.onPointerUp(e); }}
-        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); if (!connectMode) setShowCard(true); }}
+        onPointerMove={dh.onPointerMove}
+        onPointerUp={dh.onPointerUp}
+        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setShowCard(true); }}
         style={{
-          width: sz, height: sz, cursor: connectMode ? 'crosshair' : 'default',
+          width: sz, height: sz, cursor: 'default',
           userSelect: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          boxShadow: connectSource === node.id ? `0 0 0 3px ${COLORS[node.type] || '#888'}` : isSelected ? `0 0 0 2px ${COLORS[node.type] || '#888'}` : 'none',
+          boxShadow: isSelected ? `0 0 0 2px ${COLORS[node.type] || '#888'}` : 'none',
           borderRadius: 2, padding: 2,
           transition: 'box-shadow 0.15s ease',
         }}>
@@ -943,12 +983,10 @@ function Canvas() {
 
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [cardId, setCardId] = useState<string | null>(null);
-  const [connectMode, setConnectMode] = useState(false);
-  const [connectSource, setConnectSource] = useState<string | null>(null);
-  const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
-  const [reconnectingConnection, setReconnectingConnection] = useState<string | null>(null);
-  const [connMenu, setConnMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [scale, setScale] = useState(1);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const panRef = useRef<{ pointerId: number; sx: number; sy: number; ox: number; oy: number } | null>(null);
   const hyperspaceDragRef = useRef<{
     pointerId: number; ids: string[]; startPos: Record<string, { x: number; y: number }>;
     sx: number; sy: number; moved: boolean;
@@ -972,47 +1010,51 @@ function Canvas() {
     if (t === canvasRef.current || t.dataset?.canvas) {
       clearSelection();
       setCardId(null);
-      setSelectedConnection(null);
-      setReconnectingConnection(null);
-      setConnMenu(null);
-      if (connectSource) setConnectSource(null);
     }
-  }, [clearSelection, connectSource]);
-
-  const handleConnectClick = useCallback((nodeId: string) => {
-    if (!connectSource) {
-      setConnectSource(nodeId);
-    } else if (connectSource === nodeId) {
-      setConnectSource(null);
-    } else {
-      useGraph.getState().addConnection(connectSource, nodeId);
-      setConnectSource(null);
-    }
-  }, [connectSource]);
+  }, [clearSelection]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (reconnectingConnection) { setReconnectingConnection(null); return; }
-        if (connectMode) { setConnectMode(false); setConnectSource(null); return; }
         if (menuPos) { setMenuPos(null); return; }
         if (cardId) { setCardId(null); return; }
-        if (selectedConnection) { setSelectedConnection(null); return; }
-        if (connMenu) { setConnMenu(null); return; }
         useGraph.getState().goBack();
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && !cardId) {
-        if (selectedConnection) {
-          useGraph.getState().removeConnection(selectedConnection);
-          setSelectedConnection(null);
-        } else if (selectedIds.length > 0) {
+        if (selectedIds.length > 0) {
           selectedIds.forEach(id => useGraph.getState().deleteNode(id));
         }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [menuPos, cardId, selectedIds, connectMode, selectedConnection, connMenu, reconnectingConnection]);
+  }, [menuPos, cardId, selectedIds]);
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setScale(s => Math.min(3, Math.max(0.2, s * delta)));
+  }, []);
+
+  const handlePanDown = useCallback((e: React.PointerEvent) => {
+    const t = e.target as HTMLElement;
+    if ((t === canvasRef.current || t.dataset?.canvas) && e.button === 0) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      panRef.current = { pointerId: e.pointerId, sx: e.clientX, sy: e.clientY, ox: offset.x, oy: offset.y };
+    }
+  }, [offset]);
+
+  const handlePanMove = useCallback((e: React.PointerEvent) => {
+    const p = panRef.current;
+    if (!p || p.pointerId !== e.pointerId) return;
+    setOffset({ x: p.ox + (e.clientX - p.sx), y: p.oy + (e.clientY - p.sy) });
+  }, []);
+
+  const handlePanUp = useCallback((e: React.PointerEvent) => {
+    if (panRef.current?.pointerId === e.pointerId) panRef.current = null;
+  }, []);
+
+  const worldStyle: React.CSSProperties = { transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0' };
 
   if (isRoot) {
     const spaces = nodes;
@@ -1020,7 +1062,10 @@ function Canvas() {
 
     return (
       <div ref={canvasRef} data-canvas onClick={handleCanvasClick} onContextMenu={handleContextMenu}
-        style={{ position: 'relative', width: '100%', flex: 1, overflow: 'hidden' }}>
+        onPointerDown={handlePanDown} onPointerMove={handlePanMove} onPointerUp={handlePanUp}
+        onWheel={handleWheel}
+        style={{ position: 'relative', width: '100%', flex: 1, overflow: 'hidden', cursor: panRef.current ? 'grabbing' : 'grab' }}>
+        <div data-canvas style={worldStyle}>
         {spaces.length === 0 && !menuPos && (
           <div data-canvas style={{
             position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1118,6 +1163,7 @@ function Canvas() {
             </div>
           );
         })}
+        </div>
         {menuPos && <CreateMenu x={menuPos.x} y={menuPos.y} onClose={() => setMenuPos(null)} />}
       </div>
     );
@@ -1129,7 +1175,6 @@ function Canvas() {
   const precedents = nodes.filter(n => n.type === 'precedent');
   const scenarios = nodes.filter(n => n.type === 'scenario');
   const forms = nodes.filter(n => n.type === 'form');
-  const allNodeIds = new Set(nodes.map(n => n.id));
 
   const formsByFocus: Record<string, GraphNode[]> = {};
   forms.forEach(f => {
@@ -1172,32 +1217,12 @@ function Canvas() {
 
   const allNodesArr = Object.values(allNodes);
 
-  const handleReconnect = useCallback((nodeId: string) => {
-    if (reconnectingConnection) {
-      const conn = useGraph.getState().connections.find(c => c.id === reconnectingConnection);
-      if (conn && conn.toId !== nodeId && conn.fromId !== nodeId) {
-        useGraph.getState().updateConnection(reconnectingConnection, { toId: nodeId });
-      }
-      setReconnectingConnection(null);
-    } else if (selectedConnection) {
-      const conn = useGraph.getState().connections.find(c => c.id === selectedConnection);
-      if (conn && conn.toId !== nodeId && conn.fromId !== nodeId) {
-        useGraph.getState().updateConnection(selectedConnection, { toId: nodeId });
-      }
-      setSelectedConnection(null);
-    }
-  }, [selectedConnection, reconnectingConnection]);
-
-  const connectProps = { connectMode, connectSource, onConnectClick: handleConnectClick,
-    selectedConnection, onReconnect: handleReconnect };
-
   return (
     <div ref={canvasRef} data-canvas onClick={handleCanvasClick} onContextMenu={handleContextMenu}
-      style={{ position: 'relative', width: '100%', flex: 1, overflow: 'hidden' }}>
-      <ConnectionLines nodeIds={allNodeIds} visibleNodes={nodes}
-        selectedConnection={selectedConnection}
-        onSelectConnection={(id) => { setSelectedConnection(id); setConnMenu(null); }}
-        onConnectionContextMenu={(id, e) => { setSelectedConnection(id); setConnMenu({ id, x: e.clientX, y: e.clientY }); }} />
+      onPointerDown={handlePanDown} onPointerMove={handlePanMove} onPointerUp={handlePanUp}
+      onWheel={handleWheel}
+      style={{ position: 'relative', width: '100%', flex: 1, overflow: 'hidden', cursor: panRef.current ? 'grabbing' : 'grab' }}>
+      <div data-canvas style={worldStyle}>
 
       {nodes.length === 0 && !menuPos && (
         <div data-canvas style={{
@@ -1206,6 +1231,37 @@ function Canvas() {
         }}>Нажмите правой кнопкой, чтобы создать элемент</div>
       )}
 
+      <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 6 }}>
+        {(() => {
+          const edgePoint = (x1: number, y1: number, x2: number, y2: number, radius: number) => {
+            const dx = x2 - x1, dy = y2 - y1;
+            const len = Math.sqrt(dx * dx + dy * dy) || 1;
+            return { x: x2 - (dx / len) * radius, y: y2 - (dy / len) * radius };
+          };
+          const r = NODE_SIZE / 2;
+          const lines: JSX.Element[] = [];
+          forms.filter(f => f.parentFocusId && allNodes[f.parentFocusId]).forEach(f => {
+            const focus = allNodes[f.parentFocusId!]!;
+            const s = edgePoint(focus.x, focus.y, f.x, f.y, r);
+            const e = edgePoint(f.x, f.y, focus.x, focus.y, r);
+            lines.push(<line key={`fl-${f.id}`} x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#ddd" strokeWidth={1} strokeDasharray="2 4" />);
+          });
+          acts.filter(a => a.parentFocusId && allNodes[a.parentFocusId]).forEach(a => {
+            const focus = allNodes[a.parentFocusId!]!;
+            const s = edgePoint(focus.x, focus.y, a.x, a.y, r);
+            const e = edgePoint(a.x, a.y, focus.x, focus.y, r);
+            lines.push(<line key={`al-${a.id}`} x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#ccc" strokeWidth={1} strokeDasharray="2 3" />);
+          });
+          acts.filter(a => a.parentFormId && allNodes[a.parentFormId]).forEach(a => {
+            const form = allNodes[a.parentFormId!]!;
+            const s = edgePoint(form.x, form.y, a.x, a.y, r);
+            const e = edgePoint(a.x, a.y, form.x, form.y, r);
+            lines.push(<line key={`afl-${a.id}`} x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#ddd" strokeWidth={1} strokeDasharray="2 3" />);
+          });
+          return lines;
+        })()}
+      </svg>
+
       {zones.map(zone => (
         <ZoneNode key={zone.id} node={zone} allNodes={allNodesArr} />
       ))}
@@ -1213,62 +1269,30 @@ function Canvas() {
       {focuses.map(focus => (
         <FocusNode key={focus.id} focus={focus} forms={formsByFocus[focus.id] || []}
           actsByForm={actsByForm} orphanActs={orphanActs}
-          onActSession={(actId) => startSession(actId)} allNodes={allNodesArr}
-          {...connectProps} />
+          onActSession={(actId) => startSession(actId)} allNodes={allNodesArr} />
       ))}
 
       {forms.map(form => (
-        <FormNode key={form.id} form={form} allNodes={allNodesArr} {...connectProps} />
+        <FormNode key={form.id} form={form} allNodes={allNodesArr} />
       ))}
 
       {acts.map(act => (
         <ActNode key={act.id} act={act}
           precedents={precedentsByAct[act.id] || []}
           scenarios={scenariosByAct[act.id] || []}
-          onActSession={(actId) => startSession(actId)} allNodes={allNodesArr}
-          {...connectProps} />
+          onActSession={(actId) => startSession(actId)} allNodes={allNodesArr} />
       ))}
 
       {precedents.map(p => (
-        <SmallNode key={p.id} node={p} allNodes={allNodesArr} {...connectProps} />
+        <SmallNode key={p.id} node={p} allNodes={allNodesArr} />
       ))}
 
       {scenarios.map(s => (
-        <SmallNode key={s.id} node={s} allNodes={allNodesArr} {...connectProps} />
+        <SmallNode key={s.id} node={s} allNodes={allNodesArr} />
       ))}
+      </div>
 
       {menuPos && <CreateMenu x={menuPos.x} y={menuPos.y} onClose={() => setMenuPos(null)} />}
-      {!isRoot && (
-        <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 1000 }}>
-          <button onClick={() => { setConnectMode(!connectMode); if (connectMode) setConnectSource(null); }}
-            style={{
-              background: connectMode ? '#222' : '#fff', color: connectMode ? '#fff' : '#888',
-              border: '1px solid #ddd', borderRadius: 3, cursor: 'pointer', fontSize: 11,
-              padding: '4px 10px', fontFamily: 'monospace', letterSpacing: 1,
-            }}>🔗 {connectMode ? (connectSource ? 'Выберите цель' : 'Выберите источник') : 'СВЯЗИ'}</button>
-        </div>
-      )}
-      {connMenu && (
-        <div style={{
-          position: 'fixed', left: connMenu.x, top: connMenu.y, zIndex: 3000,
-          background: '#fff', border: '1px solid #ddd', boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
-          padding: 4, fontFamily: 'monospace',
-        }}>
-          <button onClick={() => {
-            setReconnectingConnection(connMenu.id);
-            setConnMenu(null);
-          }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, padding: '4px 8px', color: '#666', fontFamily: 'inherit', width: '100%', textAlign: 'left' }}>
-            ⟳ Переподключить
-          </button>
-          <button onClick={() => {
-            useGraph.getState().removeConnection(connMenu.id);
-            setConnMenu(null);
-            setSelectedConnection(null);
-          }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, padding: '4px 8px', color: '#c00', fontFamily: 'inherit', width: '100%', textAlign: 'left' }}>✕ Удалить связь</button>
-        </div>
-      )}
     </div>
   );
 }
@@ -1277,10 +1301,9 @@ function SessionView() {
   const nodes = useGraph(s => s.nodes);
   const sessionActId = useGraph(s => s.sessionActId);
   const sessionStart = useGraph(s => s.sessionStart);
-  const connections = useGraph(s => s.connections);
   const endSession = useGraph(s => s.endSession);
   const cancelSession = useGraph(s => s.cancelSession);
-  const completeAct = useGraph(s => s.completeAct);
+  const beginSession = useGraph(s => s.beginSession);
   const createPrecedent = useGraph(s => s.createPrecedent);
 
   const [elapsed, setElapsed] = useState(0);
@@ -1288,6 +1311,10 @@ function SessionView() {
   const [result, setResult] = useState<'success' | 'failure'>('success');
   const [notes, setNotes] = useState('');
   const [showPrecedentOption, setShowPrecedentOption] = useState(false);
+
+  const [selActLayer, setSelActLayer] = useState<number | null>(null);
+  const [selFormId, setSelFormId] = useState<string | null>(null);
+  const [selFormLayer, setSelFormLayer] = useState<number | null>(null);
 
   useEffect(() => {
     if (!sessionStart) return;
@@ -1307,10 +1334,10 @@ function SessionView() {
   const act = nodes[sessionActId];
   if (!act) return null;
 
-  const linked = connections.filter(c => c.fromId === act.id || c.toId === act.id)
-    .map(c => nodes[c.fromId === act.id ? c.toId : c.fromId]).filter(Boolean);
-
   const fmt = (s: number) => { const m = Math.floor(s / 60), sec = s % 60; return `${m}:${sec.toString().padStart(2, '0')}`; };
+  const parentFocus = act.parentFocusId ? nodes[act.parentFocusId] : null;
+  const focusForms = parentFocus ? Object.values(nodes).filter(n => n.type === 'form' && n.parentFocusId === parentFocus.id) : [];
+  const selectedForm = selFormId ? nodes[selFormId] : null;
 
   if (showResult) {
     return (
@@ -1348,32 +1375,120 @@ function SessionView() {
   );
 }
 
+  if (!sessionStart) {
+    const hasActLayers = act.layers.length > 0;
+    const hasFocusForms = focusForms.length > 0;
+    const hasFormLayers = selectedForm && selectedForm.layers.length > 0;
+
+    const step = hasActLayers && selActLayer === null ? 1
+      : hasFocusForms && selFormId === null ? 2
+      : hasFormLayers && selFormLayer === null ? 3
+      : 4;
+
+    const canStart = step === 4;
+
+    return (
+      <div style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 5000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace' }}>
+        <div style={{ width: 360, textAlign: 'center' }}>
+          <div style={{ fontSize: 13, color: '#999', marginBottom: 4 }}>Настройка сессии</div>
+          <div style={{ fontSize: 24, color: '#222', fontWeight: 600, marginBottom: 24 }}>{act.name}</div>
+
+          {hasActLayers && (
+            <div style={{ marginBottom: 20, textAlign: 'left' }}>
+              <div style={{ fontSize: 11, color: selActLayer !== null ? '#222' : '#bbb', marginBottom: 8, fontWeight: selActLayer !== null ? 600 : 400 }}>
+                1. Слой акта {selActLayer !== null ? '✓' : ''}
+              </div>
+              {act.layers.map((layer, i) => (
+                <div key={i} onClick={() => setSelActLayer(i)}
+                  style={{
+                    padding: '8px 12px', marginBottom: 4, border: selActLayer === i ? '2px solid #222' : '1px solid #ddd',
+                    borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#333',
+                    background: selActLayer === i ? '#f5f5f5' : '#fff',
+                  }}>
+                  {layer}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {hasFocusForms && (selActLayer !== null || !hasActLayers) && (
+            <div style={{ marginBottom: 20, textAlign: 'left' }}>
+              <div style={{ fontSize: 11, color: selFormId !== null ? '#222' : '#bbb', marginBottom: 8, fontWeight: selFormId !== null ? 600 : 400 }}>
+                {hasActLayers ? '2' : '1'}. Фигура {selFormId !== null ? '✓' : ''}
+              </div>
+              {focusForms.map(form => (
+                <div key={form.id} onClick={() => { setSelFormId(form.id); setSelFormLayer(null); }}
+                  style={{
+                    padding: '8px 12px', marginBottom: 4, border: selFormId === form.id ? '2px solid #222' : '1px solid #ddd',
+                    borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#333',
+                    background: selFormId === form.id ? '#f5f5f5' : '#fff',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                  }}>
+                  <span style={{ color: COLORS.form }}>△</span>
+                  {form.name}
+                  {form.layers.length > 0 && <span style={{ fontSize: 10, color: '#bbb', marginLeft: 'auto' }}>{form.layers.length} слоёв</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {hasFormLayers && (
+            <div style={{ marginBottom: 20, textAlign: 'left' }}>
+              <div style={{ fontSize: 11, color: selFormLayer !== null ? '#222' : '#bbb', marginBottom: 8, fontWeight: selFormLayer !== null ? 600 : 400 }}>
+                {hasActLayers ? '3' : '2'}. Слой фигуры {selFormLayer !== null ? '✓' : ''}
+              </div>
+              {selectedForm!.layers.map((layer, i) => (
+                <div key={i} onClick={() => setSelFormLayer(i)}
+                  style={{
+                    padding: '8px 12px', marginBottom: 4, border: selFormLayer === i ? '2px solid #222' : '1px solid #ddd',
+                    borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#333',
+                    background: selFormLayer === i ? '#f5f5f5' : '#fff',
+                  }}>
+                  {layer}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 24 }}>
+            <button onClick={() => {
+              beginSession();
+            }}
+              disabled={!canStart}
+              style={{
+                background: canStart ? '#222' : '#ddd', color: '#fff', border: 'none', borderRadius: 3,
+                padding: '12px 36px', cursor: canStart ? 'pointer' : 'default', fontSize: 14, fontFamily: 'inherit',
+              }}>▶ Начать</button>
+            <button onClick={cancelSession}
+              style={{ background: 'none', border: '1px solid #ddd', borderRadius: 3, padding: '12px 24px', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit', color: '#666' }}>Отмена (Esc)</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 5000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace' }}>
       <div style={{ textAlign: 'center' }}>
         <div style={{ fontSize: 13, color: '#999', marginBottom: 4 }}>Сессия</div>
         <div style={{ fontSize: 28, color: '#222', fontWeight: 600, marginBottom: 24 }}>{act.name}</div>
-        {act.description && <div style={{ fontSize: 13, color: '#888', marginBottom: 24, maxWidth: 400, lineHeight: 1.5 }}>{act.description}</div>}
-        {act.steps.length > 0 && (
-          <div style={{ marginBottom: 24, textAlign: 'left', maxWidth: 300 }}>
-            <div style={{ fontSize: 11, color: '#bbb', marginBottom: 6 }}>ШАГИ</div>
-            {act.steps.map((step, i) => (
-              <div key={i} style={{ fontSize: 12, color: '#666', marginTop: 3, display: 'flex', gap: 6 }}>
-                <span style={{ color: '#ccc' }}>{i + 1}.</span>
-                <span>{step}</span>
-              </div>
-            ))}
-          </div>
-        )}
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 20, flexWrap: 'wrap' }}>
+          {parentFocus && (
+            <span style={{ padding: '6px 14px', border: '2px solid ' + COLORS.focus, borderRadius: 4, fontSize: 12, color: COLORS.focus, background: '#f9f9f9' }}>◎ {parentFocus.name}</span>
+          )}
+          {selectedForm && (
+            <span style={{ padding: '6px 14px', border: '2px solid ' + COLORS.form, borderRadius: 4, fontSize: 12, color: COLORS.form, background: '#f9f9f9' }}>△ {selectedForm.name}</span>
+          )}
+          {selActLayer !== null && (
+            <span style={{ padding: '6px 14px', border: '2px solid ' + COLORS.act, borderRadius: 4, fontSize: 12, color: COLORS.act, background: '#f9f9f9' }}>↓ {act.layers[selActLayer]}</span>
+          )}
+          {selFormLayer !== null && selectedForm && (
+            <span style={{ padding: '6px 14px', border: '2px solid ' + COLORS.form, borderRadius: 4, fontSize: 12, color: '#666', background: '#f9f9f9' }}>△ {selectedForm.layers[selFormLayer]}</span>
+          )}
+        </div>
+
         <div style={{ fontSize: 48, color: '#222', fontWeight: 300, marginBottom: 40, fontVariantNumeric: 'tabular-nums' }}>{fmt(elapsed)}</div>
-        {linked.length > 0 && (
-          <div style={{ marginBottom: 32 }}>
-            <div style={{ fontSize: 11, color: '#bbb', marginBottom: 6 }}>СВЯЗАНО</div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-              {linked.map(l => <span key={l.id} style={{ padding: '4px 12px', border: '1px solid #eee', borderRadius: 3, fontSize: 12, color: '#666' }}>{l.name}</span>)}
-            </div>
-          </div>
-        )}
         <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
           <button onClick={() => setShowResult(true)} style={{ background: '#222', color: '#fff', border: 'none', borderRadius: 3, padding: '12px 36px', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Завершить</button>
           <button onClick={cancelSession} style={{ background: 'none', border: '1px solid #ddd', borderRadius: 3, padding: '12px 24px', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit', color: '#666' }}>Отмена (Esc)</button>

@@ -18,7 +18,7 @@ export interface GraphNode {
   zoneColor?: string;
   width?: number;
   height?: number;
-  steps: string[];
+  layers: string[];
   children: string[];
   createdAt: number;
 }
@@ -65,17 +65,17 @@ export interface GraphStore extends GraphState {
   currentParentId: () => string | null;
   visibleNodes: () => GraphNode[];
   generateId: () => string;
-  addConnection: (fromId: string, toId: string) => void;
   removeConnection: (id: string) => void;
   updateConnection: (id: string, updates: { fromId?: string; toId?: string }) => void;
   connectionsFor: (nodeId: string) => Connection[];
   startSession: (actId: string) => void;
+  beginSession: () => void;
   endSession: (result: 'success' | 'failure', notes: string) => void;
   cancelSession: () => void;
   addArchive: (a: Omit<ArchiveEntry, 'id'>) => void;
   deleteArchive: (id: string) => void;
-  addStep: (actId: string, step: string) => void;
-  removeStep: (actId: string, index: number) => void;
+  addLayer: (nodeId: string, layer: string) => void;
+  removeLayer: (nodeId: string, index: number) => void;
   completeAct: (actId: string, result: 'success' | 'failure', notes: string) => void;
   createPrecedent: (actId: string) => GraphNode | undefined;
   convertToScenario: (precedentId: string) => void;
@@ -96,6 +96,12 @@ const load = (): GraphState => {
         for (const id of ids) {
           if (!VALID_TYPES.includes(data.nodes[id].type)) {
             delete data.nodes[id];
+          } else {
+            const n = data.nodes[id];
+            if (!Array.isArray(n.layers)) {
+              n.layers = Array.isArray(n.steps) ? n.steps : [];
+              delete n.steps;
+            }
           }
         }
       }
@@ -143,7 +149,7 @@ export const useGraph = create<GraphStore>((set, get) => ({
     const parentId = extra?.parentId ?? get().currentParentId();
     const node: GraphNode = {
       id, type, name, description: '', x, y,
-      parentId, status: 'pending', steps: [], children: [], createdAt: Date.now(),
+      parentId, status: 'pending', layers: [], children: [], createdAt: Date.now(),
       width: type === 'zone' ? 400 : undefined,
       height: type === 'zone' ? 320 : undefined,
       parentFocusId: extra?.parentActId ? undefined : extra?.parentFocusId,
@@ -307,7 +313,15 @@ export const useGraph = create<GraphStore>((set, get) => ({
 
   startSession: (actId) => {
     set(s => {
-      const next = { ...s, sessionActId: actId, sessionStart: Date.now() };
+      const next = { ...s, sessionActId: actId, sessionStart: null };
+      save(next);
+      return next;
+    });
+  },
+
+  beginSession: () => {
+    set(s => {
+      const next = { ...s, sessionStart: Date.now() };
       save(next);
       return next;
     });
@@ -369,16 +383,30 @@ export const useGraph = create<GraphStore>((set, get) => ({
     });
   },
 
-  addStep: (actId, step) => {
+  addLayer: (nodeId, layer) => {
     set(s => {
-      const node = s.nodes[actId];
-      if (!node || node.type !== 'act') return s;
-      const nodes = { ...s.nodes, [actId]: { ...node, steps: [...node.steps, step] } };
+      const node = s.nodes[nodeId];
+      if (!node) return s;
+      const nodes = { ...s.nodes, [nodeId]: { ...node, layers: [...node.layers, layer] } };
       const next = { ...s, nodes };
       save(next);
       return next;
     });
   },
+
+  removeLayer: (nodeId, index) => {
+    set(s => {
+      const node = s.nodes[nodeId];
+      if (!node) return s;
+      const layers = node.layers.filter((_, i) => i !== index);
+      const nodes = { ...s.nodes, [nodeId]: { ...node, layers } };
+      const next = { ...s, nodes };
+      save(next);
+      return next;
+    });
+  },
+
+
 
   removeStep: (actId, index) => {
     set(s => {
