@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@clerk/clerk-react": "^5.61.9",
+    "@clerk/react": "^6.12.3",
     "@react-three/drei": "^9.0.0",
     "@react-three/fiber": "^8.0.0",
     "@supabase/supabase-js": "^2.110.5",

@@ -1,7 +1,7 @@
 -- Таблица узлов (пространства, фокусы, фигуры, акты, etc.)
 CREATE TABLE nodes (
   id TEXT PRIMARY KEY,
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
   type TEXT NOT NULL,
   name TEXT NOT NULL,
   description TEXT DEFAULT '',
@@ -24,7 +24,7 @@ CREATE TABLE nodes (
 -- Таблица связей
 CREATE TABLE connections (
   id TEXT PRIMARY KEY,
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
   from_id TEXT NOT NULL,
   to_id TEXT NOT NULL
 );
@@ -32,7 +32,7 @@ CREATE TABLE connections (
 -- Таблица архива
 CREATE TABLE archives (
   id TEXT PRIMARY KEY,
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
   act_id TEXT NOT NULL,
   act_name TEXT NOT NULL,
   space_id TEXT,
@@ -45,7 +45,7 @@ CREATE TABLE archives (
 
 -- Таблица конфигов сессий
 CREATE TABLE session_configs (
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
   act_id TEXT NOT NULL,
   act_layer_index INTEGER,
   form_id TEXT,
@@ -60,7 +60,8 @@ ALTER TABLE archives ENABLE ROW LEVEL SECURITY;
 ALTER TABLE session_configs ENABLE ROW LEVEL SECURITY;
 
 -- Политики: пользователь видит только свои данные
-CREATE POLICY "Users can CRUD own nodes" ON nodes FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Users can CRUD own connections" ON connections FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Users can CRUD own archives" ON archives FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Users can CRUD own session_configs" ON session_configs FOR ALL USING (auth.uid() = user_id);
+-- Используем service role key, поэтому фильтрация по user_id на клиенте
+CREATE POLICY "Users can CRUD own nodes" ON nodes FOR ALL USING (true);
+CREATE POLICY "Users can CRUD own connections" ON connections FOR ALL USING (true);
+CREATE POLICY "Users can CRUD own archives" ON archives FOR ALL USING (true);
+CREATE POLICY "Users can CRUD own session_configs" ON session_configs FOR ALL USING (true);

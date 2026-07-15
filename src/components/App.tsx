@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useGraph, GraphNode, NodeType } from '../store/graphStore';
 import { syncFromCloud } from '../store/graphStore';
+import { SignedIn, SignedOut, SignInButton, UserButton, useUser } from '@clerk/clerk-react';
+import { setUserId } from '../lib/userId';
 
 const COLORS: Record<string, string> = {
   space: '#222', focus: '#444', form: '#333', act: '#222', precedent: '#bbb', scenario: '#666', zone: '#bbb',
@@ -112,14 +114,24 @@ function Header({ onArchive }: { onArchive: () => void }) {
   const goBack = useGraph(s => s.goBack);
   const importData = useGraph(s => s.importData);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuOpen]);
 
   const handleExport = () => {
+    setMenuOpen(false);
     const state = useGraph.getState();
     const data = {
-      nodes: state.nodes,
-      connections: state.connections,
-      archives: state.archives,
-      sessionConfigs: state.sessionConfigs,
+      nodes: state.nodes, connections: state.connections,
+      archives: state.archives, sessionConfigs: state.sessionConfigs,
       exportedAt: Date.now(),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -132,6 +144,7 @@ function Header({ onArchive }: { onArchive: () => void }) {
   };
 
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMenuOpen(false);
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
@@ -155,7 +168,7 @@ function Header({ onArchive }: { onArchive: () => void }) {
           onClick={() => { if (navStack.length > 0) useGraph.getState().goBack(); }}>
           ПРОСТРАНСТВА
         </span>
-        {navStack.map((id, i) => {
+        {navStack.map((id) => {
           const n = nodes[id];
           if (!n) return null;
           return <span key={id}><span style={{ margin: '0 4px', color: '#bbb' }}>/</span><span style={{ color: '#555' }}>{n.name}</span></span>;
@@ -167,20 +180,36 @@ function Header({ onArchive }: { onArchive: () => void }) {
           }}>← Назад</button>
         )}
       </div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <input ref={fileRef} type="file" accept=".json" onChange={handleImport} style={{ display: 'none' }} />
-        <button onClick={() => fileRef.current?.click()} style={{
-          background: 'none', border: '1px solid #ddd', borderRadius: 3,
-          cursor: 'pointer', fontSize: 11, padding: '4px 10px', color: '#666', fontFamily: 'inherit',
-        }}>Импорт</button>
-        <button onClick={handleExport} style={{
-          background: 'none', border: '1px solid #ddd', borderRadius: 3,
-          cursor: 'pointer', fontSize: 11, padding: '4px 10px', color: '#666', fontFamily: 'inherit',
-        }}>Экспорт</button>
-        <button onClick={onArchive} style={{
-          background: 'none', border: '1px solid #ddd', borderRadius: 3,
-          cursor: 'pointer', fontSize: 11, padding: '4px 10px', color: '#666', fontFamily: 'inherit',
-        }}>Архив</button>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <div ref={menuRef} style={{ position: 'relative' }}>
+          <button onClick={() => setMenuOpen(!menuOpen)} style={{
+            background: 'none', border: '1px solid #ddd', borderRadius: 3,
+            cursor: 'pointer', fontSize: 14, padding: '2px 8px', color: '#666', fontFamily: 'inherit',
+            lineHeight: 1,
+          }}>⋯</button>
+          {menuOpen && (
+            <div style={{
+              position: 'absolute', top: '100%', right: 0, marginTop: 4,
+              background: '#fff', border: '1px solid #ddd', borderRadius: 4,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)', zIndex: 100, minWidth: 120,
+            }}>
+              <input ref={fileRef} type="file" accept=".json" onChange={handleImport} style={{ display: 'none' }} />
+              <button onClick={() => fileRef.current?.click()} style={{
+                display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
+                padding: '8px 12px', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', color: '#333',
+              }}>Импорт</button>
+              <button onClick={handleExport} style={{
+                display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
+                padding: '8px 12px', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', color: '#333',
+              }}>Экспорт</button>
+              <button onClick={() => { setMenuOpen(false); onArchive(); }} style={{
+                display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
+                padding: '8px 12px', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', color: '#333',
+              }}>Архив</button>
+            </div>
+          )}
+        </div>
+        <UserButton afterSignOutUrl="/" />
       </div>
     </header>
   );
@@ -1644,15 +1673,35 @@ export default function App() {
   const navStack = useGraph(s => s.navStack);
   const sessionActId = useGraph(s => s.sessionActId);
   const [showArchive, setShowArchive] = useState(false);
+  const { user } = useUser();
 
-  useEffect(() => { syncFromCloud(); }, []);
+  useEffect(() => {
+    setUserId(user?.id ?? null);
+  }, [user?.id]);
 
-  if (showArchive) return <ArchiveView onBack={() => setShowArchive(false)} />;
-  if (sessionActId) return <SessionView />;
+  useEffect(() => { if (user) syncFromCloud(); }, [user]);
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#fff' }}>
-      <Header onArchive={() => setShowArchive(true)} />
-      <ErrorBoundary><Canvas /></ErrorBoundary>
-    </div>
+    <>
+      <SignedOut>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#fff', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace' }}>
+          <div style={{ textAlign: 'center' }}>
+            <h1 style={{ fontSize: 28, color: '#222', fontWeight: 700, letterSpacing: 2, marginBottom: 24 }}>ПРОСТРАНСТВА</h1>
+            <p style={{ fontSize: 14, color: '#888', marginBottom: 32 }}>Визуальный инструмент для организации внимания</p>
+            <SignInButton mode="modal">
+              <button style={{ background: '#222', color: '#fff', border: 'none', borderRadius: 4, padding: '12px 32px', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Войти</button>
+            </SignInButton>
+          </div>
+        </div>
+      </SignedOut>
+      <SignedIn>
+        {showArchive ? <ArchiveView onBack={() => setShowArchive(false)} /> :
+         sessionActId ? <SessionView /> :
+         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#fff' }}>
+           <Header onArchive={() => setShowArchive(true)} />
+           <ErrorBoundary><Canvas /></ErrorBoundary>
+         </div>}
+      </SignedIn>
+    </>
   );
 }
