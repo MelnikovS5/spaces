@@ -41,6 +41,12 @@ export interface ArchiveEntry {
   notes: string;
 }
 
+export interface SessionConfig {
+  actLayerIndex: number | null;
+  formId: string | null;
+  formLayerIndex: number | null;
+}
+
 export interface GraphState {
   nodes: Record<string, GraphNode>;
   connections: Connection[];
@@ -49,6 +55,7 @@ export interface GraphState {
   selectedIds: string[];
   sessionActId: string | null;
   sessionStart: number | null;
+  sessionConfigs: Record<string, SessionConfig>;
   nextId: number;
 }
 
@@ -70,6 +77,7 @@ export interface GraphStore extends GraphState {
   connectionsFor: (nodeId: string) => Connection[];
   startSession: (actId: string) => void;
   beginSession: () => void;
+  saveSessionConfig: (actId: string, config: SessionConfig) => void;
   endSession: (result: 'success' | 'failure', notes: string) => void;
   cancelSession: () => void;
   addArchive: (a: Omit<ArchiveEntry, 'id'>) => void;
@@ -116,6 +124,7 @@ const load = (): GraphState => {
         selectedIds: data.selectedIds || [],
         sessionActId: data.sessionActId ?? null,
         sessionStart: data.sessionStart ?? null,
+        sessionConfigs: data.sessionConfigs || {},
         nextId: data.nextId || 1,
       };
     }
@@ -123,7 +132,7 @@ const load = (): GraphState => {
   return {
     nodes: {}, connections: [], archives: [],
     navStack: [], selectedIds: [],
-    sessionActId: null, sessionStart: null, nextId: 1,
+    sessionActId: null, sessionStart: null, sessionConfigs: {}, nextId: 1,
   };
 };
 
@@ -131,7 +140,8 @@ const save = (s: GraphState) => {
   localStorage.setItem('spaces-graph', JSON.stringify({
     nodes: s.nodes, connections: s.connections, archives: s.archives,
     navStack: s.navStack, selectedIds: s.selectedIds,
-    sessionActId: s.sessionActId, sessionStart: s.sessionStart, nextId: s.nextId,
+    sessionActId: s.sessionActId, sessionStart: s.sessionStart,
+    sessionConfigs: s.sessionConfigs, nextId: s.nextId,
   }));
 };
 
@@ -322,6 +332,14 @@ export const useGraph = create<GraphStore>((set, get) => ({
   beginSession: () => {
     set(s => {
       const next = { ...s, sessionStart: Date.now() };
+      save(next);
+      return next;
+    });
+  },
+
+  saveSessionConfig: (actId, config) => {
+    set(s => {
+      const next = { ...s, sessionConfigs: { ...s.sessionConfigs, [actId]: config } };
       save(next);
       return next;
     });

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useGraph, GraphNode, NodeType } from '../store/graphStore';
 
 const COLORS: Record<string, string> = {
-  space: '#222', focus: '#555', form: '#777', act: '#999', precedent: '#bbb', scenario: '#666', zone: '#bbb',
+  space: '#222', focus: '#444', form: '#333', act: '#222', precedent: '#bbb', scenario: '#666', zone: '#bbb',
 };
 
 function insetPolygon(pts: [number, number][], d: number): [number, number][] {
@@ -32,32 +32,32 @@ function insetPolygon(pts: [number, number][], d: number): [number, number][] {
 const SHAPES: Record<string, { label: string; render: (s: number, hasLayers?: boolean) => JSX.Element }> = {
   space: {
     label: 'Пространство',
-    render: (s) => <rect x={2} y={2} width={s - 4} height={s - 4} rx={4} fill="none" stroke={COLORS.space} strokeWidth={1.5} />,
+    render: (s) => <rect x={2} y={2} width={s - 4} height={s - 4} rx={4} fill="none" stroke={COLORS.space} strokeWidth={2} />,
   },
   focus: {
     label: 'Фокус',
-    render: (s) => <circle cx={s / 2} cy={s / 2} r={s / 2 - 2} fill="none" stroke={COLORS.focus} strokeWidth={1.5} />,
+    render: (s) => <circle cx={s / 2} cy={s / 2} r={s / 2 - 2} fill="none" stroke={COLORS.focus} strokeWidth={2} />,
   },
   form: {
     label: 'Фигура',
     render: (s, hasLayers) => {
       const pad = 2;
-      const outer = <polygon points={`${s / 2},${pad} ${pad},${s - pad} ${s - pad},${s - pad}`} fill="none" stroke={COLORS.form} strokeWidth={1.5} />;
+      const outer = <polygon points={`${s / 2},${pad} ${pad},${s - pad} ${s - pad},${s - pad}`} fill="none" stroke={COLORS.form} strokeWidth={2} />;
       if (!hasLayers) return outer;
       const verts: [number, number][] = [[s / 2, pad], [pad, s - pad], [s - pad, s - pad]];
       const inner = insetPolygon(verts, 10);
-      return <>{outer}<polygon points={inner.map(p => p.join(',')).join(' ')} fill="none" stroke={COLORS.form} strokeWidth={1} /></>;
+      return <>{outer}<polygon points={inner.map(p => p.join(',')).join(' ')} fill="none" stroke={COLORS.form} strokeWidth={1.5} /></>;
     },
   },
   act: {
     label: 'Акт',
     render: (s, hasLayers) => {
       const pad = 2, cx = s / 2;
-      const outer = <polygon points={`${cx},${s - pad} ${pad},${pad} ${s - pad},${pad}`} fill="none" stroke={COLORS.act} strokeWidth={1.5} />;
+      const outer = <polygon points={`${cx},${s - pad} ${pad},${pad} ${s - pad},${pad}`} fill="none" stroke={COLORS.act} strokeWidth={2} />;
       if (!hasLayers) return outer;
       const verts: [number, number][] = [[cx, s - pad], [pad, pad], [s - pad, pad]];
       const inner = insetPolygon(verts, 10);
-      return <>{outer}<polygon points={inner.map(p => p.join(',')).join(' ')} fill="none" stroke={COLORS.act} strokeWidth={1} /></>;
+      return <>{outer}<polygon points={inner.map(p => p.join(',')).join(' ')} fill="none" stroke={COLORS.act} strokeWidth={1.5} /></>;
     },
   },
   precedent: {
@@ -102,7 +102,7 @@ const btnStyle: React.CSSProperties = {
 function NodeShape({ type, hasLayers, size = NODE_SIZE }: { type: string; hasLayers?: boolean; size?: number }) {
   const s = SHAPES[type];
   if (!s) return null;
-  return <svg width={size} height={size} viewBox={`0 0 ${NODE_SIZE} ${NODE_SIZE}`}>{s.render(NODE_SIZE, hasLayers)}</svg>;
+  return <svg width={size} height={size} viewBox={`0 0 ${NODE_SIZE} ${NODE_SIZE}`} style={{ flexShrink: 0 }}>{s.render(NODE_SIZE, hasLayers)}</svg>;
 }
 
 function Header({ onArchive }: { onArchive: () => void }) {
@@ -257,15 +257,15 @@ function makeDragHandlers(
   return { onPointerDown, onPointerMove, onPointerUp };
 }
 
-function ResizeHandle({ nodeId, nodeX, nodeY }: { nodeId: string; nodeX: number; nodeY: number }) {
+function ResizeHandle({ nodeId, nodeX, nodeY, forceH }: { nodeId: string; nodeX: number; nodeY: number; forceH?: number }) {
   const updateNode = useGraph(s => s.updateNode);
   const [dragging, setDragging] = useState(false);
-  const ref = useRef<{ pointerId: number; sx: number; sy: number; startW: number; startH: number } | null>(null);
+  const ref = useRef<{ pointerId: number; sx: number; sy: number; startW: number } | null>(null);
   const allNodes = useGraph(s => s.nodes);
   const node = allNodes[nodeId];
   if (!node) return null;
   const w = node.width ?? NODE_SIZE;
-  const h = node.height ?? NODE_SIZE;
+  const h = forceH ?? node.height ?? NODE_SIZE;
 
   return (
     <div
@@ -274,14 +274,13 @@ function ResizeHandle({ nodeId, nodeX, nodeY }: { nodeId: string; nodeX: number;
         if (e.button !== 0) return;
         e.currentTarget.setPointerCapture(e.pointerId);
         setDragging(true);
-        ref.current = { pointerId: e.pointerId, sx: e.clientX, sy: e.clientY, startW: w, startH: h };
+        ref.current = { pointerId: e.pointerId, sx: e.clientX, sy: e.clientY, startW: w };
       }}
       onPointerMove={(e) => {
         const d = ref.current;
         if (!d || d.pointerId !== e.pointerId) return;
         updateNode(nodeId, {
           width: Math.max(50, d.startW + (e.clientX - d.sx)),
-          height: Math.max(50, d.startH + (e.clientY - d.sy)),
         });
       }}
       onPointerUp={(e) => {
@@ -339,15 +338,18 @@ function FocusNode({
   } | null>(null);
 
   const dh = makeDragHandlers(focus, isSelected, selectedIds, dragRef, selectNode, toggleSelectNode, moveNode, allNodes, () => setShowCard(true));
+  const fw = focus.width ?? NODE_SIZE;
+  const fh = Math.max(fw, Math.round(fw * 1.3));
+  const fontSize = Math.max(10, Math.round(fw / 7));
 
   return (
-    <div style={{ position: 'absolute', left: focus.x - NODE_SIZE / 2, top: focus.y - NODE_SIZE / 2, zIndex: 10 }}
+    <div style={{ position: 'absolute', left: focus.x - fw / 2, top: focus.y - fh / 2, zIndex: 10 }}
       onPointerEnter={() => { cancelLeave(); setHovered(true); }}
       onPointerLeave={scheduleLeave}
     >
       {hovered && hasChildren && (
         <div style={{
-          position: 'absolute', bottom: NODE_SIZE + 4, left: '50%', transform: 'translateX(-50%)',
+          position: 'absolute', bottom: fh + 4, left: '50%', transform: 'translateX(-50%)',
           zIndex: 100, display: 'flex', flexDirection: 'column', alignItems: 'center',
         }}
           onPointerEnter={cancelLeave}
@@ -444,20 +446,20 @@ function FocusNode({
         onPointerUp={dh.onPointerUp}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setShowCard(true); }}
         style={{
-          width: NODE_SIZE, height: NODE_SIZE, cursor: 'default',
+          width: fw, height: fh, cursor: 'default',
           userSelect: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
           boxShadow: glow, borderRadius: 2, padding: 2,
           transition: 'left 0.2s ease, top 0.2s ease, opacity 0.15s ease, box-shadow 0.15s ease',
         }}>
-        <NodeShape type="focus" />
-        <span style={{ fontSize: 11, color: COLORS.focus, maxWidth: NODE_SIZE + 20, textAlign: 'center', lineHeight: 1.2, wordBreak: 'break-word' }}>{focus.name}</span>
+        <NodeShape type="focus" size={Math.min(fw, fh)} />
+        <span style={{ fontSize, color: COLORS.focus, maxWidth: fw, textAlign: 'center', lineHeight: 1.2, overflowWrap: 'break-word' }}>{focus.name}</span>
       </div>
-      {isSelected && <ResizeHandle nodeId={focus.id} nodeX={focus.x} nodeY={focus.y} />}
+      {isSelected && <ResizeHandle nodeId={focus.id} nodeX={focus.x} nodeY={focus.y} forceH={fh} />}
 
       {showCard && (
         <div style={{
-          position: 'fixed', left: Math.min(focus.x + NODE_SIZE / 2 + 8, window.innerWidth - 220),
-          top: Math.max(8, Math.min(focus.y - NODE_SIZE / 2, window.innerHeight - 150)),
+          position: 'fixed', left: Math.min(focus.x + fw / 2 + 8, window.innerWidth - 220),
+          top: Math.max(8, Math.min(focus.y - fh / 2, window.innerHeight - 150)),
           background: '#fff', border: '1px solid #ddd', boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
           padding: 12, zIndex: 2000, minWidth: 200, fontFamily: 'monospace', maxWidth: 260,
         }}>
@@ -478,11 +480,11 @@ function FocusNode({
             createNode('act', 'Акт', focus.x, focus.y + 100, { parentFocusId: focus.id });
             setShowCard(false);
           }} style={{
-            background: 'none', border: '1px solid #ddd', borderRadius: 2, cursor: 'pointer',
-            fontSize: 11, padding: '2px 8px', color: COLORS.act, fontFamily: 'inherit', marginBottom: 4, width: '100%',
+            background: 'none', border: '1px solid #222', borderRadius: 2, cursor: 'pointer',
+            fontSize: 11, padding: '4px 8px', color: '#222', fontFamily: 'inherit', marginBottom: 4, width: '100%', fontWeight: 600,
           }}>△ Создать акт</button>
           <button onClick={() => { createNode('form', 'Фигура', focus.x, focus.y + 60, { parentFocusId: focus.id }); setShowCard(false); }}
-          style={{ background: 'none', border: '1px solid #ddd', borderRadius: 2, cursor: 'pointer', fontSize: 11, padding: '2px 8px', color: '#333', fontFamily: 'inherit', marginBottom: 4, width: '100%' }}>△ Создать фигуру</button>
+          style={{ background: 'none', border: '1px solid #222', borderRadius: 2, cursor: 'pointer', fontSize: 11, padding: '4px 8px', color: '#222', fontFamily: 'inherit', marginBottom: 4, width: '100%', fontWeight: 600 }}>△ Создать фигуру</button>
           <button onClick={() => { deleteNode(focus.id); setShowCard(false); }}
             style={{ background: 'none', border: '1px solid #ddd', borderRadius: 2, cursor: 'pointer', fontSize: 11, padding: '2px 8px', color: '#c00', fontFamily: 'inherit', width: '100%' }}>✕ Удалить</button>
         </div>
@@ -517,7 +519,9 @@ function FormNode({
   } | null>(null);
 
   const dh = makeDragHandlers(form, isSelected, selectedIds, dragRef, selectNode, toggleSelectNode, moveNode, allNodes, () => setShowCard(true));
-  const fw = form.width ?? NODE_SIZE, fh = form.height ?? NODE_SIZE;
+  const fw = form.width ?? NODE_SIZE;
+  const fh = Math.max(fw, Math.round(fw * 1.3));
+  const fontSize = Math.max(10, Math.round(fw / 7));
 
   return (
     <div style={{ position: 'absolute', left: form.x - fw / 2, top: form.y - fh / 2, zIndex: 10 }}>
@@ -532,15 +536,15 @@ function FormNode({
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setShowCard(true); }}
         style={{
           width: fw, height: fh, cursor: 'default',
-          userSelect: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+          userSelect: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4,
           boxShadow: isSelected ? `0 0 0 2px ${COLORS.form}` : 'none',
           borderRadius: 2, padding: 2,
           transition: 'left 0.2s ease, top 0.2s ease, opacity 0.15s ease, box-shadow 0.15s ease',
         }}>
         <NodeShape type="form" hasLayers={hasLayers} size={fw} />
-        <span style={{ fontSize: 11, color: COLORS.form, maxWidth: fw + 20, textAlign: 'center', lineHeight: 1.2, wordBreak: 'break-word' }}>{form.name}</span>
+        <span style={{ fontSize, color: COLORS.form, maxWidth: fw, textAlign: 'center', lineHeight: 1.2, overflowWrap: 'break-word' }}>{form.name}</span>
       </div>
-      {isSelected && <ResizeHandle nodeId={form.id} nodeX={form.x} nodeY={form.y} />}
+      {isSelected && <ResizeHandle nodeId={form.id} nodeX={form.x} nodeY={form.y} forceH={fh} />}
       {showCard && (
         <div style={{
           position: 'fixed', left: Math.min(form.x + fw / 2 + 8, window.innerWidth - 220),
@@ -631,7 +635,9 @@ function ActNode({
   } | null>(null);
 
   const dh = makeDragHandlers(act, isSelected, selectedIds, dragRef, selectNode, toggleSelectNode, moveNode, allNodes, () => setShowCard(true));
-  const aw = act.width ?? NODE_SIZE, ah = act.height ?? NODE_SIZE;
+  const aw = act.width ?? NODE_SIZE;
+  const ah = Math.max(aw, Math.round(aw * 1.3));
+  const fontSize = Math.max(10, Math.round(aw / 7));
 
   return (
     <div style={{ position: 'absolute', left: act.x - aw / 2, top: act.y - ah / 2, zIndex: 10 }}>
@@ -646,14 +652,14 @@ function ActNode({
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setShowCard(true); }}
         style={{
           width: aw, height: ah, cursor: 'default',
-          userSelect: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+          userSelect: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4,
           boxShadow: glow, borderRadius: 2, padding: 2,
           transition: 'left 0.2s ease, top 0.2s ease, opacity 0.15s ease, box-shadow 0.15s ease',
         }}>
         <NodeShape type="act" hasLayers={hasLayers} size={aw} />
-        <span style={{ fontSize: 11, color: COLORS.act, maxWidth: aw + 20, textAlign: 'center', lineHeight: 1.2, wordBreak: 'break-word' }}>{act.name}</span>
+        <span style={{ fontSize, color: COLORS.act, maxWidth: aw, textAlign: 'center', lineHeight: 1.2, overflowWrap: 'break-word' }}>{act.name}</span>
       </div>
-      {isSelected && <ResizeHandle nodeId={act.id} nodeX={act.x} nodeY={act.y} />}
+      {isSelected && <ResizeHandle nodeId={act.id} nodeX={act.x} nodeY={act.y} forceH={ah} />}
 
       {showCard && (
         <div style={{
@@ -1075,9 +1081,13 @@ function Canvas() {
         {spaces.map(space => {
           const isSelected = selectedIds.includes(space.id);
           const glow = isSelected ? `0 0 0 2px ${COLORS.space}` : `0 0 0 1px transparent`;
+          const sw = space.width ?? NODE_SIZE;
+          const sh = Math.max(sw, Math.round(sw * 1.3));
+          const fontSize = Math.max(10, Math.round(sw / 7));
 
           return (
-            <div key={space.id}
+            <div key={space.id} style={{ position: 'absolute', left: space.x - sw / 2, top: space.y - sh / 2, zIndex: 10 }}>
+            <div
               onPointerDown={(e) => {
                 e.stopPropagation();
                 if (e.button !== 0) return;
@@ -1124,14 +1134,15 @@ function Canvas() {
               }}
               onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardId(space.id); }}
               style={{
-                position: 'absolute', left: space.x - NODE_SIZE / 2, top: space.y - NODE_SIZE / 2,
-                width: NODE_SIZE, height: NODE_SIZE, cursor: 'default', userSelect: 'none',
-                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                width: sw, height: sh, cursor: 'default', userSelect: 'none',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4,
                 boxShadow: glow, borderRadius: 2, padding: 2,
                 transition: 'left 0.2s ease, top 0.2s ease, opacity 0.15s ease, box-shadow 0.15s ease',
               }}>
-              <NodeShape type="space" />
-              <span style={{ fontSize: 11, color: COLORS.space, maxWidth: NODE_SIZE + 20, textAlign: 'center', lineHeight: 1.2, wordBreak: 'break-word' }}>{space.name}</span>
+              <NodeShape type="space" size={sw} />
+              <span style={{ fontSize, color: COLORS.space, maxWidth: sw, textAlign: 'center', lineHeight: 1.2, overflowWrap: 'break-word' }}>{space.name}</span>
+            </div>
+            {isSelected && <ResizeHandle nodeId={space.id} nodeX={space.x} nodeY={space.y} forceH={sh} />}
             </div>
           );
         })}
@@ -1305,6 +1316,8 @@ function SessionView() {
   const cancelSession = useGraph(s => s.cancelSession);
   const beginSession = useGraph(s => s.beginSession);
   const createPrecedent = useGraph(s => s.createPrecedent);
+  const sessionConfigs = useGraph(s => s.sessionConfigs);
+  const saveSessionConfig = useGraph(s => s.saveSessionConfig);
 
   const [elapsed, setElapsed] = useState(0);
   const [showResult, setShowResult] = useState(false);
@@ -1312,9 +1325,10 @@ function SessionView() {
   const [notes, setNotes] = useState('');
   const [showPrecedentOption, setShowPrecedentOption] = useState(false);
 
-  const [selActLayer, setSelActLayer] = useState<number | null>(null);
-  const [selFormId, setSelFormId] = useState<string | null>(null);
-  const [selFormLayer, setSelFormLayer] = useState<number | null>(null);
+  const saved = sessionActId ? sessionConfigs[sessionActId] : undefined;
+  const [selActLayer, setSelActLayer] = useState<number | null>(() => saved?.actLayerIndex ?? null);
+  const [selFormId, setSelFormId] = useState<string | null>(() => saved?.formId ?? null);
+  const [selFormLayer, setSelFormLayer] = useState<number | null>(() => saved?.formLayerIndex ?? null);
 
   useEffect(() => {
     if (!sessionStart) return;
@@ -1337,7 +1351,7 @@ function SessionView() {
   const fmt = (s: number) => { const m = Math.floor(s / 60), sec = s % 60; return `${m}:${sec.toString().padStart(2, '0')}`; };
   const parentFocus = act.parentFocusId ? nodes[act.parentFocusId] : null;
   const focusForms = parentFocus ? Object.values(nodes).filter(n => n.type === 'form' && n.parentFocusId === parentFocus.id) : [];
-  const selectedForm = selFormId ? nodes[selFormId] : null;
+  const selectedForm = selFormId && selFormId !== '__skip__' ? nodes[selFormId] : null;
 
   if (showResult) {
     return (
@@ -1380,12 +1394,16 @@ function SessionView() {
     const hasFocusForms = focusForms.length > 0;
     const hasFormLayers = selectedForm && selectedForm.layers.length > 0;
 
-    const step = hasActLayers && selActLayer === null ? 1
-      : hasFocusForms && selFormId === null ? 2
-      : hasFormLayers && selFormLayer === null ? 3
-      : 4;
+    const canStart = true;
 
-    const canStart = step === 4;
+    const handleBegin = () => {
+      saveSessionConfig(sessionActId, {
+        actLayerIndex: selActLayer,
+        formId: selFormId,
+        formLayerIndex: selFormLayer,
+      });
+      beginSession();
+    };
 
     return (
       <div style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 5000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace' }}>
@@ -1396,7 +1414,7 @@ function SessionView() {
           {hasActLayers && (
             <div style={{ marginBottom: 20, textAlign: 'left' }}>
               <div style={{ fontSize: 11, color: selActLayer !== null ? '#222' : '#bbb', marginBottom: 8, fontWeight: selActLayer !== null ? 600 : 400 }}>
-                1. Слой акта {selActLayer !== null ? '✓' : ''}
+                Слой акта {selActLayer !== null ? '✓' : ''}
               </div>
               {act.layers.map((layer, i) => (
                 <div key={i} onClick={() => setSelActLayer(i)}
@@ -1408,13 +1426,19 @@ function SessionView() {
                   {layer}
                 </div>
               ))}
+              <div onClick={() => setSelActLayer(-1)}
+                style={{
+                  padding: '8px 12px', marginBottom: 4, border: selActLayer === -1 ? '2px solid #222' : '1px solid #ddd',
+                  borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#bbb',
+                  background: selActLayer === -1 ? '#f5f5f5' : '#fff',
+                }}>—</div>
             </div>
           )}
 
-          {hasFocusForms && (selActLayer !== null || !hasActLayers) && (
+          {hasFocusForms && (
             <div style={{ marginBottom: 20, textAlign: 'left' }}>
               <div style={{ fontSize: 11, color: selFormId !== null ? '#222' : '#bbb', marginBottom: 8, fontWeight: selFormId !== null ? 600 : 400 }}>
-                {hasActLayers ? '2' : '1'}. Фигура {selFormId !== null ? '✓' : ''}
+                Фигура {selFormId !== null ? '✓' : ''}
               </div>
               {focusForms.map(form => (
                 <div key={form.id} onClick={() => { setSelFormId(form.id); setSelFormLayer(null); }}
@@ -1426,16 +1450,21 @@ function SessionView() {
                   }}>
                   <span style={{ color: COLORS.form }}>△</span>
                   {form.name}
-                  {form.layers.length > 0 && <span style={{ fontSize: 10, color: '#bbb', marginLeft: 'auto' }}>{form.layers.length} слоёв</span>}
                 </div>
               ))}
+              <div onClick={() => { setSelFormId('__skip__'); setSelFormLayer(null); }}
+                style={{
+                  padding: '8px 12px', marginBottom: 4, border: selFormId === '__skip__' ? '2px solid #222' : '1px solid #ddd',
+                  borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#bbb',
+                  background: selFormId === '__skip__' ? '#f5f5f5' : '#fff',
+                }}>—</div>
             </div>
           )}
 
           {hasFormLayers && (
             <div style={{ marginBottom: 20, textAlign: 'left' }}>
               <div style={{ fontSize: 11, color: selFormLayer !== null ? '#222' : '#bbb', marginBottom: 8, fontWeight: selFormLayer !== null ? 600 : 400 }}>
-                {hasActLayers ? '3' : '2'}. Слой фигуры {selFormLayer !== null ? '✓' : ''}
+                Слой фигуры {selFormLayer !== null ? '✓' : ''}
               </div>
               {selectedForm!.layers.map((layer, i) => (
                 <div key={i} onClick={() => setSelFormLayer(i)}
@@ -1447,17 +1476,20 @@ function SessionView() {
                   {layer}
                 </div>
               ))}
+              <div onClick={() => setSelFormLayer(-1)}
+                style={{
+                  padding: '8px 12px', marginBottom: 4, border: selFormLayer === -1 ? '2px solid #222' : '1px solid #ddd',
+                  borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#bbb',
+                  background: selFormLayer === -1 ? '#f5f5f5' : '#fff',
+                }}>—</div>
             </div>
           )}
 
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 24 }}>
-            <button onClick={() => {
-              beginSession();
-            }}
-              disabled={!canStart}
+            <button onClick={handleBegin}
               style={{
-                background: canStart ? '#222' : '#ddd', color: '#fff', border: 'none', borderRadius: 3,
-                padding: '12px 36px', cursor: canStart ? 'pointer' : 'default', fontSize: 14, fontFamily: 'inherit',
+                background: '#222', color: '#fff', border: 'none', borderRadius: 3,
+                padding: '12px 36px', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit',
               }}>▶ Начать</button>
             <button onClick={cancelSession}
               style={{ background: 'none', border: '1px solid #ddd', borderRadius: 3, padding: '12px 24px', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit', color: '#666' }}>Отмена (Esc)</button>
@@ -1478,13 +1510,12 @@ function SessionView() {
             <span style={{ padding: '6px 14px', border: '2px solid ' + COLORS.focus, borderRadius: 4, fontSize: 12, color: COLORS.focus, background: '#f9f9f9' }}>◎ {parentFocus.name}</span>
           )}
           {selectedForm && (
-            <span style={{ padding: '6px 14px', border: '2px solid ' + COLORS.form, borderRadius: 4, fontSize: 12, color: COLORS.form, background: '#f9f9f9' }}>△ {selectedForm.name}</span>
+            <span style={{ padding: '6px 14px', border: '2px solid ' + COLORS.form, borderRadius: 4, fontSize: 12, color: COLORS.form, background: '#f9f9f9' }}>
+              △ {selectedForm.name}{selFormLayer !== null && selFormLayer >= 0 ? ` · ${selectedForm.layers[selFormLayer]}` : ''}
+            </span>
           )}
-          {selActLayer !== null && (
+          {selActLayer !== null && selActLayer >= 0 && (
             <span style={{ padding: '6px 14px', border: '2px solid ' + COLORS.act, borderRadius: 4, fontSize: 12, color: COLORS.act, background: '#f9f9f9' }}>↓ {act.layers[selActLayer]}</span>
-          )}
-          {selFormLayer !== null && selectedForm && (
-            <span style={{ padding: '6px 14px', border: '2px solid ' + COLORS.form, borderRadius: 4, fontSize: 12, color: '#666', background: '#f9f9f9' }}>△ {selectedForm.layers[selFormLayer]}</span>
           )}
         </div>
 
