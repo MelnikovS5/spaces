@@ -109,6 +109,40 @@ function Header({ onArchive }: { onArchive: () => void }) {
   const nodes = useGraph(s => s.nodes);
   const navStack = useGraph(s => s.navStack);
   const goBack = useGraph(s => s.goBack);
+  const importData = useGraph(s => s.importData);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const handleExport = () => {
+    const state = useGraph.getState();
+    const data = {
+      nodes: state.nodes,
+      connections: state.connections,
+      archives: state.archives,
+      sessionConfigs: state.sessionConfigs,
+      exportedAt: Date.now(),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `spaces-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result as string);
+        if (data.nodes) importData(data);
+      } catch {}
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
 
   return (
     <header style={{
@@ -132,10 +166,21 @@ function Header({ onArchive }: { onArchive: () => void }) {
           }}>← Назад</button>
         )}
       </div>
-      <button onClick={onArchive} style={{
-        background: 'none', border: '1px solid #ddd', borderRadius: 3,
-        cursor: 'pointer', fontSize: 11, padding: '4px 10px', color: '#666', fontFamily: 'inherit',
-      }}>Архив</button>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input ref={fileRef} type="file" accept=".json" onChange={handleImport} style={{ display: 'none' }} />
+        <button onClick={() => fileRef.current?.click()} style={{
+          background: 'none', border: '1px solid #ddd', borderRadius: 3,
+          cursor: 'pointer', fontSize: 11, padding: '4px 10px', color: '#666', fontFamily: 'inherit',
+        }}>Импорт</button>
+        <button onClick={handleExport} style={{
+          background: 'none', border: '1px solid #ddd', borderRadius: 3,
+          cursor: 'pointer', fontSize: 11, padding: '4px 10px', color: '#666', fontFamily: 'inherit',
+        }}>Экспорт</button>
+        <button onClick={onArchive} style={{
+          background: 'none', border: '1px solid #ddd', borderRadius: 3,
+          cursor: 'pointer', fontSize: 11, padding: '4px 10px', color: '#666', fontFamily: 'inherit',
+        }}>Архив</button>
+      </div>
     </header>
   );
 }
@@ -1073,9 +1118,9 @@ function Canvas() {
         style={{ position: 'relative', width: '100%', flex: 1, overflow: 'hidden', cursor: panRef.current ? 'grabbing' : 'grab' }}>
         <div data-canvas style={worldStyle}>
         {spaces.length === 0 && !menuPos && (
-          <div data-canvas style={{
-            position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#ccc', fontSize: 16, cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace', letterSpacing: 1,
+          <div style={{
+            position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#ccc', fontSize: 16, cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace', letterSpacing: 1, zIndex: 1,
           }}>Нажмите правой кнопкой, чтобы создать пространство</div>
         )}
         {spaces.map(space => {
@@ -1236,38 +1281,38 @@ function Canvas() {
       <div data-canvas style={worldStyle}>
 
       {nodes.length === 0 && !menuPos && (
-        <div data-canvas style={{
-          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#ccc', fontSize: 16, cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace', letterSpacing: 1,
+        <div style={{
+          position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: '#ccc', fontSize: 16, cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace', letterSpacing: 1, zIndex: 1,
         }}>Нажмите правой кнопкой, чтобы создать элемент</div>
       )}
 
-      <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 6 }}>
+      <svg style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, overflow: 'visible', pointerEvents: 'none', zIndex: 6 }}>
         {(() => {
-          const edgePoint = (x1: number, y1: number, x2: number, y2: number, radius: number) => {
-            const dx = x2 - x1, dy = y2 - y1;
+          const edgePoint = (fromX: number, fromY: number, toX: number, toY: number, toRadius: number) => {
+            const dx = toX - fromX, dy = toY - fromY;
             const len = Math.sqrt(dx * dx + dy * dy) || 1;
-            return { x: x2 - (dx / len) * radius, y: y2 - (dy / len) * radius };
+            return { x: toX - (dx / len) * toRadius, y: toY - (dy / len) * toRadius };
           };
-          const r = NODE_SIZE / 2;
+          const r = (node: GraphNode) => Math.max(node.width ?? NODE_SIZE, node.height ?? NODE_SIZE) / 2;
           const lines: JSX.Element[] = [];
           forms.filter(f => f.parentFocusId && allNodes[f.parentFocusId]).forEach(f => {
             const focus = allNodes[f.parentFocusId!]!;
-            const s = edgePoint(focus.x, focus.y, f.x, f.y, r);
-            const e = edgePoint(f.x, f.y, focus.x, focus.y, r);
-            lines.push(<line key={`fl-${f.id}`} x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#ddd" strokeWidth={1} strokeDasharray="2 4" />);
+            const s = edgePoint(f.x, f.y, focus.x, focus.y, r(focus));
+            const e = edgePoint(focus.x, focus.y, f.x, f.y, r(f));
+            lines.push(<line key={`fl-${f.id}`} x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#999" strokeWidth={1} strokeDasharray="4 4" />);
           });
           acts.filter(a => a.parentFocusId && allNodes[a.parentFocusId]).forEach(a => {
             const focus = allNodes[a.parentFocusId!]!;
-            const s = edgePoint(focus.x, focus.y, a.x, a.y, r);
-            const e = edgePoint(a.x, a.y, focus.x, focus.y, r);
-            lines.push(<line key={`al-${a.id}`} x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#ccc" strokeWidth={1} strokeDasharray="2 3" />);
+            const s = edgePoint(a.x, a.y, focus.x, focus.y, r(focus));
+            const e = edgePoint(focus.x, focus.y, a.x, a.y, r(a));
+            lines.push(<line key={`al-${a.id}`} x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#aaa" strokeWidth={1} strokeDasharray="4 4" />);
           });
           acts.filter(a => a.parentFormId && allNodes[a.parentFormId]).forEach(a => {
             const form = allNodes[a.parentFormId!]!;
-            const s = edgePoint(form.x, form.y, a.x, a.y, r);
-            const e = edgePoint(a.x, a.y, form.x, form.y, r);
-            lines.push(<line key={`afl-${a.id}`} x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#ddd" strokeWidth={1} strokeDasharray="2 3" />);
+            const s = edgePoint(a.x, a.y, form.x, form.y, r(form));
+            const e = edgePoint(form.x, form.y, a.x, a.y, r(a));
+            lines.push(<line key={`afl-${a.id}`} x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#999" strokeWidth={1} strokeDasharray="4 4" />);
           });
           return lines;
         })()}

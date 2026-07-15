@@ -88,6 +88,7 @@ export interface GraphStore extends GraphState {
   createPrecedent: (actId: string) => GraphNode | undefined;
   convertToScenario: (precedentId: string) => void;
   completeScenario: (scenarioId: string) => void;
+  importData: (data: { nodes?: Record<string, GraphNode>; connections?: Connection[]; archives?: ArchiveEntry[]; sessionConfigs?: Record<string, SessionConfig> }) => void;
 }
 
 const VALID_TYPES: NodeType[] = ['space', 'focus', 'form', 'act', 'precedent', 'scenario', 'zone'];
@@ -487,6 +488,18 @@ export const useGraph = create<GraphStore>((set, get) => ({
       const spaceId = node.parentId;
       const nodes = { ...s.nodes, [scenarioId]: { ...node, type: 'space' as NodeType, parentId: spaceId, status: 'success' } };
       const next = { ...s, nodes };
+      save(next);
+      return next;
+    });
+  },
+
+  importData: (data) => {
+    set(s => {
+      const nodes = data.nodes ? { ...s.nodes, ...data.nodes } : s.nodes;
+      const connections = data.connections ? [...s.connections, ...data.connections] : s.connections;
+      const archives = data.archives ? [...s.archives, ...data.archives] : s.archives;
+      const sessionConfigs = data.sessionConfigs ? { ...s.sessionConfigs, ...data.sessionConfigs } : s.sessionConfigs;
+      const next = { ...s, nodes, connections, archives, sessionConfigs };
       save(next);
       return next;
     });
