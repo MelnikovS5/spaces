@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { saveBulkData, loadAllData } from '../lib/sync';
 
 export type NodeType = 'space' | 'focus' | 'form' | 'act' | 'precedent' | 'scenario' | 'zone';
 
@@ -144,7 +145,41 @@ const save = (s: GraphState) => {
     sessionActId: s.sessionActId, sessionStart: s.sessionStart,
     sessionConfigs: s.sessionConfigs, nextId: s.nextId,
   }));
+  saveBulkData({
+    nodes: s.nodes, connections: s.connections,
+    archives: s.archives, sessionConfigs: s.sessionConfigs,
+  }).catch(() => {});
 };
+
+let _syncedFromCloud = false;
+
+export async function syncFromCloud(): Promise<boolean> {
+  if (_syncedFromCloud) return false;
+  try {
+    const data = await loadAllData();
+    if (Object.keys(data.nodes).length === 0) { _syncedFromCloud = true; return false; }
+    const s = useGraph.getState();
+    const hasLocal = Object.keys(s.nodes).length > 0;
+    if (hasLocal) {
+      for (const [id, node] of Object.entries(data.nodes)) {
+        if (!s.nodes[id]) s.nodes[id] = node;
+      }
+      for (const conn of data.connections) {
+        if (!s.connections.find(c => c.id === conn.id)) s.connections.push(conn);
+      }
+      for (const arc of data.archives) {
+        if (!s.archives.find(a => a.id === arc.id)) s.archives.push(arc);
+      }
+      for (const [actId, cfg] of Object.entries(data.sessionConfigs)) {
+        if (!s.sessionConfigs[actId]) s.sessionConfigs[actId] = cfg;
+      }
+    } else {
+      set({ nodes: data.nodes, connections: data.connections, archives: data.archives, sessionConfigs: data.sessionConfigs });
+    }
+    _syncedFromCloud = true;
+    return true;
+  } catch { return false; }
+}
 
 export const useGraph = create<GraphStore>((set, get) => ({
   ...load(),

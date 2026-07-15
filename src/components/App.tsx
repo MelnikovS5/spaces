@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useGraph, GraphNode, NodeType } from '../store/graphStore';
+import { syncFromCloud } from '../store/graphStore';
 
 const COLORS: Record<string, string> = {
   space: '#222', focus: '#444', form: '#333', act: '#222', precedent: '#bbb', scenario: '#666', zone: '#bbb',
@@ -1643,6 +1644,8 @@ export default function App() {
   const navStack = useGraph(s => s.navStack);
   const sessionActId = useGraph(s => s.sessionActId);
   const [showArchive, setShowArchive] = useState(false);
+
+  useEffect(() => { syncFromCloud(); }, []);
 
   if (showArchive) return <ArchiveView onBack={() => setShowArchive(false)} />;
   if (sessionActId) return <SessionView />;
